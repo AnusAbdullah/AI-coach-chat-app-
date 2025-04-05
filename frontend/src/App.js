@@ -11,7 +11,6 @@ function App() {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (userName.trim()) {
-      // Generate a pseudo-random user ID
       const uniqueId = `user_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
       setUserId(uniqueId);
       setIsLoggedIn(true);
