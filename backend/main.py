@@ -17,22 +17,25 @@ load_dotenv(dotenv_path=".env.production")
 app = FastAPI()
 
 # CORS middleware configuration
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://ai-coach-app.vercel.app",  # Production frontend URL
-        "http://localhost:3000",  # Local development
-    ],
+    allow_origins=["https://ai-coach-chat-app-production.up.railway.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Stream.io configuration
+# Initialize StreamChat client
 stream_client = StreamChat(
     api_key=os.getenv("STREAM_API_KEY"),
     api_secret=os.getenv("STREAM_API_SECRET")
 )
+
+# Add a root endpoint for health checks
+@app.get("/")
+async def root():
+    return {"status": "OK", "message": "AI Coach Backend is running"}
 
 # Gemini configuration
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -214,7 +217,13 @@ async def get_user_memory(user_id: str):
         raise HTTPException(status_code=404, detail="User not found")
     return user_memory[user_id]
 
+
+@app.get("/favicon.ico")
+async def favicon():
+    return {"status": "No favicon available"}
+
+
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
