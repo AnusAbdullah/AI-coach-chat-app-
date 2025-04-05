@@ -1,0 +1,6 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+stream-chat==4.22.0
+pydantic==2.9.2
+google-generativeai==0.8.2  # Latest version as of now; adjust if needed
+python-dotenv==1.0.1

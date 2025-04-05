@@ -6,7 +6,7 @@ from typing import Optional, List
 import os
 from dotenv import load_dotenv
 import logging
-from openai import OpenAI
+import google.generativeai as genai
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -34,8 +34,9 @@ stream_client = StreamChat(
     api_secret=os.getenv("STREAM_API_SECRET")
 )
 
-# OpenAI configuration
-openai_client = OpenAI()
+# Gemini configuration
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+gemini_client = genai.GenerativeModel('gemini-1.5-flash')  # Use a valid Gemini model
 
 class User(BaseModel):
     id: str
@@ -119,13 +120,8 @@ async def handle_message(message: ChatMessage):
         # Check for conversation loops
         last_few_messages = user_data["conversation_history"][-6:] if len(user_data["conversation_history"]) >= 6 else user_data["conversation_history"]
         
-        # If we have enough messages to check for loops
         if len(last_few_messages) >= 4:
-            # Check for repeating patterns in recent messages
             user_messages = [msg["content"] for msg in last_few_messages if msg["role"] == "user"]
-            ai_messages = [msg["content"] for msg in last_few_messages if msg["role"] == "assistant"]
-            
-            # Check if there's a repeating pattern in user messages (indicates a loop)
             loop_detected = False
             for phrase in ["AI coach", "support you", "dive into", "let's focus", "break the cycle", "What specific", "what you're hoping", "I'm here to help"]:
                 matches = sum(1 for msg in user_messages if phrase.lower() in msg.lower())
@@ -134,7 +130,6 @@ async def handle_message(message: ChatMessage):
                     break
             
             if loop_detected:
-                # Return a special loop-breaking message
                 return {
                     "ai_response": "I've noticed we seem to be in a conversation loop. Let's talk about something specific. Tell me about your day or a specific topic you'd like to learn about. For example, you could say 'I want to learn Python' or 'Help me understand machine learning'."
                 }
@@ -153,21 +148,22 @@ async def handle_message(message: ChatMessage):
         
         If the user seems to be repeating AI-like responses, gently guide them to share something about themselves instead of trying to act as an AI coach."""
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            *user_data["conversation_history"][-6:]  # Include last 6 messages for context
-        ]
-
-        # Get AI response from OpenAI
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",  # Using a smaller model to reduce latency
-            messages=messages,
-            max_tokens=300,
-            temperature=0.7,
-            top_p=0.9
+        # Combine system prompt and recent conversation history into a single string
+        conversation = system_prompt + "\n\n" + "\n".join(
+            [f"{msg['role']}: {msg['content']}" for msg in user_data["conversation_history"][-6:]]
         )
 
-        ai_response = response.choices[0].message.content
+        # Get AI response from Gemini
+        response = gemini_client.generate_content(
+            contents=conversation,
+            generation_config={
+                "max_output_tokens": 300,
+                "temperature": 0.7,
+                "top_p": 0.9
+            }
+        )
+
+        ai_response = response.text
 
         # Update conversation history with AI's response
         user_data["conversation_history"].append({
@@ -202,4 +198,5 @@ async def get_user_memory(user_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
