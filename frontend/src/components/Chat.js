@@ -3,11 +3,6 @@ import { StreamChat } from 'stream-chat';
 import {
   Chat as StreamChatComponent,
   Channel,
-  Window,
-  ChannelHeader,
-  MessageList,
-  MessageInput,
-  Thread,
   LoadingIndicator,
   useChannelStateContext,
 } from 'stream-chat-react';
