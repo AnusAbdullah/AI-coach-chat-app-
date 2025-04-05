@@ -36,7 +36,7 @@ stream_client = StreamChat(
 
 # Gemini configuration
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-gemini_client = genai.GenerativeModel('gemini-1.5-flash')  # Use a valid Gemini model
+gemini_client = genai.GenerativeModel('gemini-2.0-flash')  # Use a valid Gemini model
 
 class User(BaseModel):
     id: str
