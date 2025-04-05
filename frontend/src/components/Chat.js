@@ -98,7 +98,9 @@ const MessageWithCustomClass = (props) => {
 const CustomMessageList = () => {
   const messageEndRef = useRef(null);
   const channelContext = useChannelStateContext();
-  const messages = channelContext?.messages || [];
+  const messages = React.useMemo(() => {
+    return channelContext?.messages || [];
+  }, [channelContext?.messages]);
 
   useEffect(() => {
     try {
