@@ -12,7 +12,7 @@ import google.generativeai as genai
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+load_dotenv(dotenv_path=".env.production")
 
 app = FastAPI()
 
