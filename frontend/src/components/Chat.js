@@ -165,71 +165,7 @@ const ChatComponent = ({ userId, userName }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [processingMessage, setProcessingMessage] = useState(false);
-  const [lastProcessedMessageId, setLastProcessedMessageId] = useState(null);
-  const [userMessages, setUserMessages] = useState(new Set());
   const welcomeMessageSentRef = useRef(false);
-
-  // Function to handle AI coach responses
-  const handleNewMessage = async (channelInstance, event) => {
-    // Skip if not a valid message from the user
-    if (!event.message || !event.message.text || !event.message.user || event.message.user.id !== userId) {
-      return;
-    }
-
-    // Skip if already processed or currently processing
-    if (processingMessage || userMessages.has(event.message.id) || event.message.id === lastProcessedMessageId) {
-      return;
-    }
-
-    // Skip messages that look like AI-generated content (to break loops)
-    const aiPhrases = [
-      "I'm your AI coach",
-      "I appreciate your",
-      "Let's focus on you",
-      "I'm here to help",
-      "it seems we're in a loop",
-      "Let's break the cycle",
-      "I understand the confusion"
-    ];
-    
-    if (aiPhrases.some(phrase => event.message.text.toLowerCase().includes(phrase.toLowerCase()))) {
-      console.log('Skipping message that appears to be AI content:', event.message.text);
-      return;
-    }
-
-    try {
-      // Mark as processing and record this message
-      setProcessingMessage(true);
-      setLastProcessedMessageId(event.message.id);
-      setUserMessages(prev => new Set(prev).add(event.message.id));
-
-      // Get AI response from backend
-      const response = await axios.post(`${API_URL}/chat/message/`, {
-        user_id: userId,
-        message: event.message.text,
-        channel_id: channelInstance.id,
-        message_id: event.message.id
-      });
-
-      if (response.data?.ai_response) {
-        await channelInstance.sendMessage({
-          text: response.data.ai_response,
-          user: {
-            id: 'ai_coach_1',
-            name: 'AI Coach',
-            image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
-          }
-        });
-      }
-    } catch (error) {
-      console.error('Error getting AI response:', error);
-    } finally {
-      // Clear processing state after a delay
-      setTimeout(() => {
-        setProcessingMessage(false);
-      }, 1000);
-    }
-  };
 
   useEffect(() => {
     let client;
@@ -308,9 +244,6 @@ const ChatComponent = ({ userId, userName }) => {
           });
         }
 
-        // IMPORTANT: We're NOT using the message.new event anymore
-        // This is critical to prevent loops
-        
         setChatClient(client);
         setChannel(currentChannel);
         setLoading(false);
@@ -324,11 +257,8 @@ const ChatComponent = ({ userId, userName }) => {
     // Cleanup function
     const cleanup = async () => {
       setProcessingMessage(false);
-      setLastProcessedMessageId(null);
-      setUserMessages(new Set());
       
       if (currentChannel) {
-        // Remove ALL event listeners instead of just message.new
         currentChannel.off();
         try {
           await currentChannel.stopWatching();
@@ -357,7 +287,7 @@ const ChatComponent = ({ userId, userName }) => {
     };
   }, [userId, userName]);
 
-  // Add a custom message input that directly calls handleNewMessage
+  // Custom Message Input
   const CustomMessageInput = () => {
     const { channel } = useChannelStateContext();
     const [text, setText] = useState('');
