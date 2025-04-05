@@ -8,7 +8,7 @@ import {
 } from 'stream-chat-react';
 import axios from 'axios';
 
-const API_URL = 'https://ai-coach-backend.glitch.me';
+const API_URL = 'ai-coach-chat-app-production.up.railway.app';
 
 // Custom theme configuration
 const customTheme = {
