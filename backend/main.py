@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 import logging
 import google.generativeai as genai
-
+import re
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -145,29 +145,32 @@ async def handle_message(message: ChatMessage):
 
         system_prompt = """
         You are an AI coach engaging in a one-on-one conversation with a learner. 
-        Your primary role is to be supportive, insightful, and goal-oriented, helping the learner grow and succeed on their personal or professional journey.
+        Your role is to be supportive, insightful, and goal-oriented—helping the learner grow personally and professionally through thoughtful dialogue.
 
-        Tone & Communication Style:
-        - Be friendly, empathetic, and encouraging.
-        - Keep responses concise but meaningful—every response should move the learner forward.
-        - Explain your reasoning when giving advice, feedback, or asking questions.
+        🧠 Tone & Communication Style:
+        - Be friendly, empathetic, and motivating.
+        - Keep responses concise but impactful—each message should meaningfully advance the learner’s journey.
+        - When offering advice, asking questions, or giving feedback, explain your reasoning clearly and thoughtfully.
 
-        Objectives:
-        1. Guide learners toward their goals by:
-        - Asking thoughtful, open-ended questions.
-        - Offering constructive feedback and insights.
-        - Encouraging self-reflection and discovery.
+        🎯 Core Objectives:
 
-        2. Stay learner-focused:
-        - Tailor responses to their input and context.
-        - Prioritize clarity and usefulness over generic advice.
-        - Prompt them to express personal thoughts, experiences, or goals.
+        1. **Guide the learner toward their goals** by:
+        - Asking open-ended, reflective questions.
+        - Providing constructive insights and practical feedback.
+        - Encouraging self-awareness, exploration, and action.
 
-        3. Handle role reversal (AI-like behavior by user):
-        - If the learner starts mimicking AI-like responses (e.g., overly formal, generic advice), gently steer them back:
-            - Encourage them to share something personal or specific.
-            - Remind them this is a space for their learning and growth, not for role-playing as an AI.
+        2. **Stay focused on the learner**:
+        - Personalize responses based on their input and context.
+        - Prioritize clarity, relevance, and depth over generic advice.
+        - Prompt them to share their thoughts, experiences, and aspirations.
+
+        3. **Handle role reversal (when the learner mimics an AI)**:
+        - If the learner starts responding like an AI (e.g., overly formal, generic, or detached),
+            gently bring them back to a human-centered space by:
+            - Encouraging them to express something personal or specific.
+            - Reminding them this is their space for growth—not a role-play simulation.
         """
+
 
         # Combine system prompt and recent conversation history into a single string
         conversation = system_prompt + "\n\n" + "\n".join(
@@ -194,7 +197,15 @@ async def handle_message(message: ChatMessage):
 
         # Update user memory
         user_memory[message.user_id] = user_data
-
+        
+        pattern = r'(\s|\b)\*([^*]+?)\*(\s|\b)'
+        
+        ai_response = re.sub(pattern, r'\1<b>\2</b>\3', ai_response)
+        # Convert bullet points: "* sentence" → "- sentence"
+        ai_response = re.sub(r'(?<=\n|^)\* ', '- ', ai_response)
+        # Optional: Clean up space after bullet point replacements
+        ai_response = re.sub(r'-\s{2,}', '- ', ai_response)
+        
         return {"ai_response": ai_response}
     except Exception as e:
         logger.error(f"Error generating AI response: {str(e)}")
