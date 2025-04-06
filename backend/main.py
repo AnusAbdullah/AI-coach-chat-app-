@@ -198,13 +198,21 @@ async def handle_message(message: ChatMessage):
         # Update user memory
         user_memory[message.user_id] = user_data
         
-        pattern = r'(\s|\b)\*([^*]+?)\*(\s|\b)'
+        # Process triple asterisks first (***word***)
+        pattern_triple = r'(\s|\b)\*\*\*([^*]+?)\*\*\*(\s|\b)'
+        ai_response = re.sub(pattern_triple, r'\1<b><i>\2</i></b>\3', ai_response)
         
-        ai_response = re.sub(pattern, r'\1<b>\2</b>\3', ai_response)
-        # # Convert bullet points: "* sentence" → "- sentence"
-        # ai_response = re.sub(r'(?<=\n|^)\* ', '- ', ai_response)
-        # # Optional: Clean up space after bullet point replacements
-        # ai_response = re.sub(r'-\s{2,}', '- ', ai_response)
+        # Process double asterisks (**word**)
+        pattern_double = r'(\s|\b)\*\*([^*]+?)\*\*(\s|\b)'
+        ai_response = re.sub(pattern_double, r'\1<b>\2</b>\3', ai_response)
+        
+        # Process single asterisks (*word*)
+        pattern_single = r'(\s|\b)\*([^*]+?)\*(\s|\b)'
+        ai_response = re.sub(pattern_single, r'\1<i>\2</i>\3', ai_response)
+        
+        # Handle bullet points (preserve lines starting with * followed by space)
+        pattern_bullet = r'^(\s*)\*\s'
+        ai_response = re.sub(pattern_bullet, r'\1• ', ai_response, flags=re.MULTILINE)
         
         return {"ai_response": ai_response}
     except Exception as e:
