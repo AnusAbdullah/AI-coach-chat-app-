@@ -171,7 +171,6 @@ async def handle_message(message: ChatMessage):
             - Reminding them this is their space for growth—not a role-play simulation.
         """
 
-
         # Combine system prompt and recent conversation history into a single string
         conversation = system_prompt + "\n\n" + "\n".join(
             [f"{msg['role']}: {msg['content']}" for msg in user_data["conversation_history"][-6:]]
@@ -189,6 +188,19 @@ async def handle_message(message: ChatMessage):
 
         ai_response = response.text
 
+        # # Parse markdown syntax to HTML
+        # # Process triple asterisks (***word***) for bold and italic
+        # ai_response = re.sub(r'\*\*\*([^*]+?)\*\*\*', r'<b><i>\1</i></b>', ai_response)
+        
+        # # Process double asterisks (**word**) for bold
+        # ai_response = re.sub(r'\*\*([^*]+?)\*\*', r'<b>\1</b>', ai_response)
+        
+        # # Process single asterisks (*word*) for italic
+        # ai_response = re.sub(r'\*([^*]+?)\*', r'<i>\1</i>', ai_response)
+        
+        # # Handle bullet points (preserve lines starting with * followed by space)
+        # ai_response = re.sub(r'^\*\s', r'• ', ai_response, flags=re.MULTILINE)
+
         # Update conversation history with AI's response
         user_data["conversation_history"].append({
             "role": "assistant",
@@ -197,22 +209,6 @@ async def handle_message(message: ChatMessage):
 
         # Update user memory
         user_memory[message.user_id] = user_data
-        
-        # Process triple asterisks first (***word***)
-        pattern_triple = r'(\s|\b)\*\*\*([^*]+?)\*\*\*(\s|\b)'
-        ai_response = re.sub(pattern_triple, r'\1<b><i>\2</i></b>\3', ai_response)
-        
-        # Process double asterisks (**word**)
-        pattern_double = r'(\s|\b)\*\*([^*]+?)\*\*(\s|\b)'
-        ai_response = re.sub(pattern_double, r'\1<b>\2</b>\3', ai_response)
-        
-        # Process single asterisks (*word*)
-        pattern_single = r'(\s|\b)\*([^*]+?)\*(\s|\b)'
-        ai_response = re.sub(pattern_single, r'\1<i>\2</i>\3', ai_response)
-        
-        # Handle bullet points (preserve lines starting with * followed by space)
-        pattern_bullet = r'^(\s*)\*\s'
-        ai_response = re.sub(pattern_bullet, r'\1• ', ai_response, flags=re.MULTILINE)
         
         return {"ai_response": ai_response}
     except Exception as e:
