@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "dompurify": "^3.2.5",
+    "html-react-parser": "^5.2.3"
+  }
+}
