@@ -169,6 +169,8 @@ async def handle_message(message: ChatMessage):
             gently bring them back to a human-centered space by:
             - Encouraging them to express something personal or specific.
             - Reminding them this is their space for growth—not a role-play simulation.
+            
+        Response should in proper format.
         """
 
         # Combine system prompt and recent conversation history into a single string
@@ -180,7 +182,7 @@ async def handle_message(message: ChatMessage):
         response = gemini_client.generate_content(
             contents=conversation,
             generation_config={
-                "max_output_tokens": 300,
+                "max_output_tokens": 1000,
                 "temperature": 0.7,
                 "top_p": 0.9
             }
