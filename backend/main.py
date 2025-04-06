@@ -201,10 +201,10 @@ async def handle_message(message: ChatMessage):
         pattern = r'(\s|\b)\*([^*]+?)\*(\s|\b)'
         
         ai_response = re.sub(pattern, r'\1<b>\2</b>\3', ai_response)
-        # Convert bullet points: "* sentence" → "- sentence"
-        ai_response = re.sub(r'(?<=\n|^)\* ', '- ', ai_response)
-        # Optional: Clean up space after bullet point replacements
-        ai_response = re.sub(r'-\s{2,}', '- ', ai_response)
+        # # Convert bullet points: "* sentence" → "- sentence"
+        # ai_response = re.sub(r'(?<=\n|^)\* ', '- ', ai_response)
+        # # Optional: Clean up space after bullet point replacements
+        # ai_response = re.sub(r'-\s{2,}', '- ', ai_response)
         
         return {"ai_response": ai_response}
     except Exception as e:
