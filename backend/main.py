@@ -2,15 +2,15 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from stream_chat import StreamChat
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import os
 from dotenv import load_dotenv
 import logging
 import google.generativeai as genai
 import re
-from sqlalchemy import create_engine, Column, Integer, String, JSON, DateTime, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from datetime import datetime
 
 # Configure logging
@@ -35,8 +35,8 @@ class UserModel(Base):
     id = Column(String, primary_key=True)
     name = Column(String)
     role = Column(String)
-    goals = Column(JSON, default=list)
-    preferences = Column(JSON, default=dict)
+    goals = Column(JSONB, default=lambda: [])
+    preferences = Column(JSONB, default=lambda: {})
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -55,7 +55,7 @@ class MessageModel(Base):
     id = Column(Integer, primary_key=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"))
     role = Column(String)  # "user" or "assistant"
-    content = Column(String)
+    content = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 # Create tables
