@@ -188,16 +188,102 @@ async def create_user(user: User, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/chat/token/")
-async def get_chat_token(user_id: str):
+async def get_chat_token(user_id: str, db: Session = Depends(get_db)):
     try:
+        # Check if user exists, create if not
+        user = db.query(UserModel).filter(UserModel.id == user_id).first()
+        if not user:
+            logger.info(f"User {user_id} not found when getting token, creating automatically")
+            # Extract name from user_id (fallback method)
+            user_name = user_id.replace('user_', '').replace('_', ' ').title()
+            
+            # Create user in database
+            user = UserModel(
+                id=user_id,
+                name=user_name,
+                role="learner",
+                goals=[],
+                preferences={}
+            )
+            db.add(user)
+            db.commit()
+            
+            # Create user in Stream.io
+            try:
+                if stream_client:
+                    user_data = {
+                        "id": user_id,
+                        "name": user_name
+                    }
+                    stream_client.upsert_user(user_data)
+            except Exception as e:
+                logger.error(f"Error creating user in Stream: {str(e)}")
+        
         token = stream_client.create_token(user_id)
         return {"token": token}
     except Exception as e:
+        logger.error(f"Error creating chat token: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/chat/channel/")
-async def create_channel(learner_id: str, coach_id: str):
+async def create_channel(learner_id: str, coach_id: str, db: Session = Depends(get_db)):
     try:
+        # Check if learner exists, create if not
+        learner = db.query(UserModel).filter(UserModel.id == learner_id).first()
+        if not learner:
+            logger.info(f"Learner {learner_id} not found when creating channel, creating automatically")
+            # Extract name from user_id (fallback method)
+            learner_name = learner_id.replace('user_', '').replace('_', ' ').title()
+            
+            # Create learner in database
+            learner = UserModel(
+                id=learner_id,
+                name=learner_name,
+                role="learner",
+                goals=[],
+                preferences={}
+            )
+            db.add(learner)
+            
+            # Create learner in Stream.io
+            try:
+                if stream_client:
+                    user_data = {
+                        "id": learner_id,
+                        "name": learner_name
+                    }
+                    stream_client.upsert_user(user_data)
+            except Exception as e:
+                logger.error(f"Error creating learner in Stream: {str(e)}")
+        
+        # Check if coach exists, create if not (for AI coach)
+        coach = db.query(UserModel).filter(UserModel.id == coach_id).first()
+        if not coach and coach_id == "ai_coach_1":
+            logger.info("AI coach not found, creating automatically")
+            # Create coach in database
+            coach = UserModel(
+                id=coach_id,
+                name="AI Coach",
+                role="coach",
+                goals=[],
+                preferences={}
+            )
+            db.add(coach)
+            
+            # Create coach in Stream.io
+            try:
+                if stream_client:
+                    coach_data = {
+                        "id": coach_id,
+                        "name": "AI Coach",
+                        "image": "https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff"
+                    }
+                    stream_client.upsert_user(coach_data)
+            except Exception as e:
+                logger.error(f"Error creating coach in Stream: {str(e)}")
+        
+        db.commit()
+        
         channel = stream_client.channel(
             "messaging",
             f"coach-{coach_id}-learner-{learner_id}",
@@ -209,11 +295,41 @@ async def create_channel(learner_id: str, coach_id: str):
         channel.create(coach_id)
         return {"channel_id": channel.id}
     except Exception as e:
+        logger.error(f"Error creating channel: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/chat/message/")
 async def handle_message(message: ChatMessage, db: Session = Depends(get_db)):
     try:
+        # Check if user exists, create if not
+        user = db.query(UserModel).filter(UserModel.id == message.user_id).first()
+        if not user:
+            logger.info(f"User {message.user_id} not found, creating automatically")
+            # Extract name from user_id (fallback method)
+            user_name = message.user_id.replace('user_', '').replace('_', ' ').title()
+            
+            # Create user in Stream.io
+            try:
+                if stream_client:
+                    user_data = {
+                        "id": message.user_id,
+                        "name": user_name
+                    }
+                    stream_client.upsert_user(user_data)
+            except Exception as e:
+                logger.error(f"Error creating user in Stream: {str(e)}")
+            
+            # Create user in database
+            user = UserModel(
+                id=message.user_id,
+                name=user_name,
+                role="learner",
+                goals=[],
+                preferences={}
+            )
+            db.add(user)
+            db.commit()
+        
         # Get or create conversation
         conversation = db.query(ConversationModel).filter(
             ConversationModel.user_id == message.user_id,
@@ -274,7 +390,6 @@ async def handle_message(message: ChatMessage, db: Session = Depends(get_db)):
         db.add(user_message)
         
         # Get user's goals and preferences
-        user = db.query(UserModel).filter(UserModel.id == message.user_id).first()
         user_context = {
             "goals": [],
             "preferences": {}
