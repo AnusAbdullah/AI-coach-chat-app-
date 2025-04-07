@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { StreamChat } from 'stream-chat';
 import {
   Chat as StreamChatComponent,
@@ -28,8 +28,14 @@ const PreviousConversations = ({ conversations, onConversationSelect, isOpen, to
 
   // Format date for conversation groups
   const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    if (!dateString) return 'Unknown date';
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    } catch (error) {
+      console.error('Error formatting date:', error);
+      return 'Unknown date';
+    }
   };
 
   return (
@@ -41,30 +47,40 @@ const PreviousConversations = ({ conversations, onConversationSelect, isOpen, to
       {isOpen && (
         <div className="previous-conversations-list">
           {conversations.map((conversation, index) => {
+            if (!conversation || !conversation.messages) {
+              return null; // Skip invalid conversations
+            }
+            
             // Get the first few messages to show as preview
             const previewMessages = conversation.messages.slice(0, 2);
-            const conversationDate = conversation.messages.length > 0 
-              ? formatDate(conversation.messages[0].created_at) 
-              : 'Unknown date';
+            let conversationDate = 'Unknown date';
+            
+            if (conversation.messages.length > 0 && conversation.messages[0].created_at) {
+              conversationDate = formatDate(conversation.messages[0].created_at);
+            }
             
             return (
               <div 
-                key={conversation.channel_id} 
+                key={conversation.channel_id || index} 
                 className="previous-conversation-item"
                 onClick={() => onConversationSelect(conversation.channel_id)}
               >
                 <div className="conversation-date">{conversationDate}</div>
                 <div className="conversation-preview">
-                  {previewMessages.map((msg, i) => (
-                    <div key={i} className="preview-message">
-                      <span className={`preview-author ${msg.role === 'assistant' ? 'ai-author' : 'user-author'}`}>
-                        {msg.role === 'assistant' ? 'AI: ' : 'You: '}
-                      </span>
-                      <span className="preview-text">
-                        {msg.content.length > 40 ? msg.content.substring(0, 40) + '...' : msg.content}
-                      </span>
-                    </div>
-                  ))}
+                  {previewMessages.map((msg, i) => {
+                    if (!msg || !msg.content) return null;
+                    
+                    return (
+                      <div key={i} className="preview-message">
+                        <span className={`preview-author ${msg.role === 'assistant' ? 'ai-author' : 'user-author'}`}>
+                          {msg.role === 'assistant' ? 'AI: ' : 'You: '}
+                        </span>
+                        <span className="preview-text">
+                          {msg.content.length > 40 ? msg.content.substring(0, 40) + '...' : msg.content}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
@@ -211,7 +227,6 @@ const ChatComponent = ({ userId, userName }) => {
   const [chatClient, setChatClient] = useState(null);
   const [channel, setChannel] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [loadingPreviousChats, setLoadingPreviousChats] = useState(false);
   const [error, setError] = useState(null);
   const [processingMessage, setProcessingMessage] = useState(false);
   const [text, setText] = useState('');
@@ -228,40 +243,59 @@ const ChatComponent = ({ userId, userName }) => {
     "Can you help me with motivation?"
   ];
 
-  // Fetch previous conversations
-  const fetchPreviousConversations = async () => {
+  // Fetch previous conversations - wrapped in useCallback to prevent dependency cycles
+  const fetchPreviousConversations = useCallback(async () => {
+    if (!userId) {
+      console.warn('Cannot fetch previous conversations: User ID is missing');
+      return;
+    }
+    
     try {
-      setLoadingPreviousChats(true);
       const response = await axios.get(`${API_URL}/memory/${userId}`);
       
-      if (response.data && response.data.conversation_history) {
+      if (response.data && Array.isArray(response.data.conversation_history)) {
         // Sort conversations by most recent first
         const sortedConversations = [...response.data.conversation_history].sort((a, b) => {
-          const aDate = a.messages && a.messages.length > 0 ? new Date(a.messages[0].created_at) : new Date(0);
-          const bDate = b.messages && b.messages.length > 0 ? new Date(b.messages[0].created_at) : new Date(0);
+          const aDate = a.messages && a.messages.length > 0 && a.messages[0].created_at
+            ? new Date(a.messages[0].created_at) 
+            : new Date(0);
+          const bDate = b.messages && b.messages.length > 0 && b.messages[0].created_at
+            ? new Date(b.messages[0].created_at)
+            : new Date(0);
           return bDate - aDate;
         });
         
         setPreviousConversations(sortedConversations);
+      } else {
+        console.warn('Invalid conversation history data format:', response.data);
+        setPreviousConversations([]);
       }
     } catch (error) {
       console.error('Error fetching previous conversations:', error);
-    } finally {
-      setLoadingPreviousChats(false);
+      // Don't show error to user, just log it and continue with empty conversations
+      setPreviousConversations([]);
     }
-  };
+  }, [userId]); // Only re-create if userId changes
 
   // Change to a different conversation channel
   const handleConversationSelect = async (channelId) => {
-    if (!chatClient) return;
+    if (!chatClient || !channelId) {
+      console.error('Cannot switch channels: Missing client or channel ID');
+      return;
+    }
+    
+    setLoading(true);
     
     try {
-      setLoading(true);
-      
       // Clean up current channel
       if (channel) {
         channel.off();
-        await channel.stopWatching();
+        try {
+          await channel.stopWatching();
+        } catch (e) {
+          console.warn('Error stopping previous channel watch:', e);
+          // Continue despite error
+        }
       }
       
       // Create and watch the selected channel
@@ -272,13 +306,13 @@ const ChatComponent = ({ userId, userName }) => {
       
       await selectedChannel.watch();
       setChannel(selectedChannel);
-      setLoading(false);
       
       // Hide previous conversations panel after selection
       setShowPreviousConversations(false);
     } catch (error) {
       console.error('Error changing conversation:', error);
-      setError(error.message);
+      setError('Failed to switch conversations. Please try reloading the page.');
+    } finally {
       setLoading(false);
     }
   };
@@ -290,13 +324,21 @@ const ChatComponent = ({ userId, userName }) => {
   }, []);
 
   const handleSendMessage = async (messageText) => {
-    if (!messageText.trim()) return;
+    if (!messageText || !messageText.trim()) {
+      return;
+    }
+    
+    if (!channel) {
+      setError('Chat connection error. Please reload the page.');
+      return;
+    }
     
     setShowQuickReplies(false);
     
     try {
       setProcessingMessage(true);
       
+      // Send user message to Stream Chat
       await channel.sendMessage({
         text: messageText,
         user: {
@@ -306,15 +348,32 @@ const ChatComponent = ({ userId, userName }) => {
         },
       });
       
-      const response = await axios.post(`${API_URL}/chat/message/`, {
-        user_id: userId,
-        message: messageText,
-        channel_id: channel.id,
-      });
+      // Get AI response from backend
+      try {
+        const response = await axios.post(`${API_URL}/chat/message/`, {
+          user_id: userId,
+          message: messageText,
+          channel_id: channel.id,
+        });
 
-      if (response.data?.ai_response) {
+        if (response.data?.ai_response) {
+          // Send AI response to Stream Chat
+          await channel.sendMessage({
+            text: response.data.ai_response,
+            user: {
+              id: 'ai_coach_1',
+              name: 'AI Coach',
+              image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
+            }
+          });
+        } else {
+          console.warn('No AI response received from the backend');
+        }
+      } catch (apiError) {
+        console.error('Error getting AI response from API:', apiError);
+        // Send error message to the chat
         await channel.sendMessage({
-          text: response.data.ai_response,
+          text: "I'm having trouble responding right now. Please try again in a moment.",
           user: {
             id: 'ai_coach_1',
             name: 'AI Coach',
@@ -323,7 +382,7 @@ const ChatComponent = ({ userId, userName }) => {
         });
       }
     } catch (error) {
-      console.error('Error getting AI response:', error);
+      console.error('Error in message handling:', error);
     } finally {
       setProcessingMessage(false);
       setText('');
@@ -466,7 +525,7 @@ const ChatComponent = ({ userId, userName }) => {
     return () => {
       cleanup();
     };
-  }, [userId, userName]);
+  }, [userId, userName, fetchPreviousConversations]);
 
   if (loading) {
     return (
