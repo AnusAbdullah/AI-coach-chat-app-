@@ -678,3 +678,63 @@ html, body {
 .previous-conversations-container {
   height: calc(100vh - 50px); /* Subtract header height */
 }
+
+/* New chat button */
+.new-chat-button-container {
+  padding: 5px 0 15px;
+}
+
+.new-chat-button {
+  width: 100%;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.new-chat-button:hover {
+  background-color: #0069d9;
+}
+
+.plus-icon {
+  font-size: 18px;
+  margin-right: 8px;
+  font-weight: bold;
+}
+
+/* Conversations loading indicator */
+.conversations-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 0;
+  color: #666;
+  text-align: center;
+}
+
+.conversations-loading p {
+  margin-top: 15px;
+  font-size: 14px;
+}
+
+.conversations-loading-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(0, 123, 255, 0.2);
+  border-radius: 50%;
+  border-top-color: #007bff;
+  animation: conversations-spinner 1s ease-in-out infinite;
+}
+
+@keyframes conversations-spinner {
+  to { transform: rotate(360deg); }
+}
