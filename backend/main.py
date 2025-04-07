@@ -367,7 +367,22 @@ async def handle_message(message: ChatMessage, db: Session = Depends(get_db)):
                 important_past_messages.append(past_msg)
         
         # Check for conversation loops
-        if len(recent_messages) >= 4:
+        if len(recent_messages) >= 3:
+            # Check for repetitive AI responses
+            ai_messages = [msg for msg in recent_messages if msg.role == "assistant"]
+            if len(ai_messages) >= 2:
+                # Check if the last two AI responses are very similar
+                if ai_messages[0].content == ai_messages[1].content or (
+                    len(ai_messages[0].content) > 100 and 
+                    len(ai_messages[1].content) > 100 and
+                    ai_messages[0].content[:100] == ai_messages[1].content[:100]
+                ):
+                    logger.warning("Detected repetitive AI responses, providing a different response")
+                    return {
+                        "ai_response": "I notice I've been repeating myself, which isn't helpful. Let me address your question differently. What specific aspect of this topic would you like me to explore further?"
+                    }
+            
+            # Check user message patterns
             user_messages = [msg.content for msg in recent_messages if msg.role == "user"]
             loop_detected = False
             for phrase in ["AI coach", "support you", "dive into", "let's focus", "break the cycle", "What specific", "what you're hoping", "I'm here to help"]:
@@ -389,73 +404,29 @@ async def handle_message(message: ChatMessage, db: Session = Depends(get_db)):
         )
         db.add(user_message)
         
-        # Get user's goals and preferences
-        user_context = {
-            "goals": [],
-            "preferences": {}
-        }
-
-        if user:
-            # Handle both SQLite and PostgreSQL JSON data
-            if is_sqlite:
-                user_context["goals"] = user.goals if user.goals else []
-                user_context["preferences"] = user.preferences if user.preferences else {}
-            else:
-                user_context["goals"] = user.goals if user.goals else []
-                user_context["preferences"] = user.preferences if user.preferences else {}
-        
-        system_prompt = f"""
-        You are an AI coach engaging in a one-on-one conversation with a learner. 
-        Your role is to be supportive, insightful, and goal-oriented—helping the learner grow personally and professionally through thoughtful dialogue.
-
-        User Context:
-        Goals: {user_context['goals']}
-        Preferences: {user_context['preferences']}
-
-        Previous Conversation Context: 
-        {' '.join([f"In a previous session: {msg.content}" for msg in important_past_messages])}
-
-        🧠 Tone & Communication Style:
-        - Be friendly, empathetic, and motivating.
-        - Keep responses concise but impactful—each message should meaningfully advance the learner's journey.
-        - When offering advice, asking questions, or giving feedback, explain your reasoning clearly and thoughtfully.
-
-        🎯 Core Objectives:
-
-        1. **Guide the learner toward their goals** by:
-        - Asking open-ended, reflective questions.
-        - Providing constructive insights and practical feedback.
-        - Encouraging self-awareness, exploration, and action.
-
-        2. **Stay focused on the learner**:
-        - Personalize responses based on their input and context.
-        - Prioritize clarity, relevance, and depth over generic advice.
-        - Prompt them to share their thoughts, experiences, and aspirations.
-
-        3. **Handle role reversal (when the learner mimics an AI)**:
-        - If the learner starts responding like an AI (e.g., overly formal, generic, or detached),
-            gently bring them back to a human-centered space by:
-            - Encouraging them to express something personal or specific.
-            - Reminding them this is their space for growth—not a role-play simulation.
-
-        4. **Build on past conversations**:
-        - Reference previous discussions when relevant.
-        - Show continuity in your coaching approach.
-            
-        Response should in proper format.
-        """
-
-        # Combine system prompt and recent conversation history
+        # Get recent conversation as simple text
         conversation_history = "\n".join(
-            [f"{msg.role}: {msg.content}" for msg in reversed(recent_messages)]
+            [f"{'User' if msg.role == 'user' else 'AI'}: {msg.content}" for msg in reversed(recent_messages)]
         )
-        full_prompt = system_prompt + "\n\n" + conversation_history
 
         # Get AI response from Gemini
         try:
-            logger.debug(f"Sending prompt to Gemini API. Context length: {len(full_prompt)}")
+            # Build a simple, clear prompt
+            simple_prompt = f"""
+You are an AI coach having a conversation with a user. Answer their questions directly and helpfully.
+    
+Previous messages:
+{conversation_history}
+
+User's latest question: {message.message}
+
+Important: If the user is asking about a specific topic like 'transformers', 'python', etc., 
+provide a direct, informative answer about that topic. Do not repeat an introduction.
+"""
+
+            logger.debug(f"Sending simplified prompt to Gemini API")
             response = gemini_client.generate_content(
-                contents=full_prompt,
+                contents=simple_prompt,
                 generation_config={
                     "max_output_tokens": 1000,
                     "temperature": 0.7,
@@ -463,11 +434,11 @@ async def handle_message(message: ChatMessage, db: Session = Depends(get_db)):
                 }
             )
             ai_response = response.text
-            logger.debug(f"Received response from Gemini API. Length: {len(ai_response)}")
+            logger.debug(f"Received response from Gemini API: {len(ai_response)} chars")
         except Exception as e:
             logger.error(f"Error from Gemini API: {str(e)}")
             # Provide a fallback response
-            ai_response = "I'm having trouble processing your request right now. Let's try a different approach. Could you tell me more about what you'd like to discuss today?"
+            ai_response = "I'm having trouble processing your request right now. Could you try asking in a different way?"
 
         # Save AI response
         ai_message = MessageModel(

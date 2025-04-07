@@ -443,3 +443,130 @@ html, body {
   background: #d1d1d1;
   border-radius: 3px;
 }
+
+/* Chat app container with sidebar layout */
+.chat-app-container {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Main chat container - adjust to work with sidebar */
+.chat-container {
+  height: 100vh;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: #f5f8fa;
+  overflow: hidden;
+}
+
+/* Previous conversations container */
+.previous-conversations-container {
+  width: 280px;
+  height: 100vh;
+  background-color: #f0f2f5;
+  border-right: 1px solid #ddd;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header for previous conversations */
+.previous-conversations-header {
+  padding: 15px;
+  background-color: #007bff;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.previous-conversations-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+/* List of previous conversations */
+.previous-conversations-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+/* Individual conversation item */
+.previous-conversation-item {
+  background-color: white;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.previous-conversation-item:hover {
+  background-color: #f8f9fa;
+}
+
+/* Date display for conversations */
+.conversation-date {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 5px;
+}
+
+/* Preview of conversation messages */
+.conversation-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.preview-message {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Author styling in preview */
+.preview-author {
+  font-weight: bold;
+  margin-right: 5px;
+}
+
+.ai-author {
+  color: #007bff;
+}
+
+.user-author {
+  color: #343a40;
+}
+
+/* Preview text */
+.preview-text {
+  color: #555;
+  word-break: break-word;
+}
+
+/* Mobile responsiveness for the sidebar */
+@media (max-width: 768px) {
+  .chat-app-container {
+    flex-direction: column;
+  }
+
+  .previous-conversations-container {
+    width: 100%;
+    height: auto;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid #ddd;
+  }
+  
+  .previous-conversations-list {
+    max-height: calc(40vh - 50px);
+  }
+}

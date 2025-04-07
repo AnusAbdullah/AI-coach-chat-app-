@@ -20,6 +20,61 @@ const customTheme = {
   '--font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
 };
 
+// Previous Conversations component
+const PreviousConversations = ({ conversations, onConversationSelect, isOpen, toggleOpen }) => {
+  if (!conversations || conversations.length === 0) {
+    return null;
+  }
+
+  // Format date for conversation groups
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  return (
+    <div className="previous-conversations-container">
+      <div className="previous-conversations-header" onClick={toggleOpen}>
+        <h3>Previous Conversations {isOpen ? '▼' : '▶'}</h3>
+      </div>
+      
+      {isOpen && (
+        <div className="previous-conversations-list">
+          {conversations.map((conversation, index) => {
+            // Get the first few messages to show as preview
+            const previewMessages = conversation.messages.slice(0, 2);
+            const conversationDate = conversation.messages.length > 0 
+              ? formatDate(conversation.messages[0].created_at) 
+              : 'Unknown date';
+            
+            return (
+              <div 
+                key={conversation.channel_id} 
+                className="previous-conversation-item"
+                onClick={() => onConversationSelect(conversation.channel_id)}
+              >
+                <div className="conversation-date">{conversationDate}</div>
+                <div className="conversation-preview">
+                  {previewMessages.map((msg, i) => (
+                    <div key={i} className="preview-message">
+                      <span className={`preview-author ${msg.role === 'assistant' ? 'ai-author' : 'user-author'}`}>
+                        {msg.role === 'assistant' ? 'AI: ' : 'You: '}
+                      </span>
+                      <span className="preview-text">
+                        {msg.content.length > 40 ? msg.content.substring(0, 40) + '...' : msg.content}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Custom Channel Header
 const CustomChannelHeader = () => {
   const { channel } = useChannelStateContext();
@@ -156,10 +211,13 @@ const ChatComponent = ({ userId, userName }) => {
   const [chatClient, setChatClient] = useState(null);
   const [channel, setChannel] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadingPreviousChats, setLoadingPreviousChats] = useState(false);
   const [error, setError] = useState(null);
   const [processingMessage, setProcessingMessage] = useState(false);
   const [text, setText] = useState('');
   const [showQuickReplies, setShowQuickReplies] = useState(true);
+  const [previousConversations, setPreviousConversations] = useState([]);
+  const [showPreviousConversations, setShowPreviousConversations] = useState(true);
   const textareaRef = useRef(null);
   const welcomeMessageSentRef = useRef(false);
 
@@ -169,6 +227,61 @@ const ChatComponent = ({ userId, userName }) => {
     "How does this work?",
     "Can you help me with motivation?"
   ];
+
+  // Fetch previous conversations
+  const fetchPreviousConversations = async () => {
+    try {
+      setLoadingPreviousChats(true);
+      const response = await axios.get(`${API_URL}/memory/${userId}`);
+      
+      if (response.data && response.data.conversation_history) {
+        // Sort conversations by most recent first
+        const sortedConversations = [...response.data.conversation_history].sort((a, b) => {
+          const aDate = a.messages && a.messages.length > 0 ? new Date(a.messages[0].created_at) : new Date(0);
+          const bDate = b.messages && b.messages.length > 0 ? new Date(b.messages[0].created_at) : new Date(0);
+          return bDate - aDate;
+        });
+        
+        setPreviousConversations(sortedConversations);
+      }
+    } catch (error) {
+      console.error('Error fetching previous conversations:', error);
+    } finally {
+      setLoadingPreviousChats(false);
+    }
+  };
+
+  // Change to a different conversation channel
+  const handleConversationSelect = async (channelId) => {
+    if (!chatClient) return;
+    
+    try {
+      setLoading(true);
+      
+      // Clean up current channel
+      if (channel) {
+        channel.off();
+        await channel.stopWatching();
+      }
+      
+      // Create and watch the selected channel
+      const selectedChannel = chatClient.channel('messaging', channelId, {
+        name: 'AI Coach Chat',
+        image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
+      });
+      
+      await selectedChannel.watch();
+      setChannel(selectedChannel);
+      setLoading(false);
+      
+      // Hide previous conversations panel after selection
+      setShowPreviousConversations(false);
+    } catch (error) {
+      console.error('Error changing conversation:', error);
+      setError(error.message);
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -314,6 +427,10 @@ const ChatComponent = ({ userId, userName }) => {
         setChatClient(client);
         setChannel(currentChannel);
         setLoading(false);
+        
+        // Fetch previous conversations after setting up the chat
+        fetchPreviousConversations();
+        
       } catch (error) {
         console.error('Error initializing chat:', error);
         setError(error.message);
@@ -381,59 +498,68 @@ const ChatComponent = ({ userId, userName }) => {
   }
 
   return (
-    <div className="chat-container">
-      <StreamChatComponent theme={customTheme} client={chatClient}>
-        <Channel channel={channel}>
-          <div className="str-chat__main">
-            <CustomChannelHeader />
-            <CustomMessageList />
-            <div className="message-input-container">
-              {processingMessage && (
-                <div className="typing-indicator">
-                  <div className="typing-indicator__dot"></div>
-                  <div className="typing-indicator__dot"></div>
-                  <div className="typing-indicator__dot"></div>
-                </div>
-              )}
-              {showQuickReplies && (
-                <div className="quick-reply-container">
-                  {quickReplies.map((reply, index) => (
-                    <button 
-                      key={index} 
-                      className="quick-reply-button" 
-                      onClick={() => handleQuickReply(reply)}
-                      disabled={processingMessage}
-                    >
-                      {reply}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <form onSubmit={handleSubmit} className="message-input-form">
-                <textarea
-                  ref={textareaRef}
-                  className="message-input-textarea"
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder={processingMessage ? "AI coach is typing..." : "Type your message here..."}
-                  disabled={processingMessage}
-                  rows={1}
-                />
-                <button 
-                  className="message-input-button" 
-                  type="submit"
-                  disabled={processingMessage || !text.trim()}
-                >
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="white"/>
-                  </svg>
-                </button>
-              </form>
+    <div className="chat-app-container">
+      <PreviousConversations 
+        conversations={previousConversations}
+        onConversationSelect={handleConversationSelect}
+        isOpen={showPreviousConversations}
+        toggleOpen={() => setShowPreviousConversations(!showPreviousConversations)}
+      />
+      
+      <div className="chat-container">
+        <StreamChatComponent theme={customTheme} client={chatClient}>
+          <Channel channel={channel}>
+            <div className="str-chat__main">
+              <CustomChannelHeader />
+              <CustomMessageList />
+              <div className="message-input-container">
+                {processingMessage && (
+                  <div className="typing-indicator">
+                    <div className="typing-indicator__dot"></div>
+                    <div className="typing-indicator__dot"></div>
+                    <div className="typing-indicator__dot"></div>
+                  </div>
+                )}
+                {showQuickReplies && (
+                  <div className="quick-reply-container">
+                    {quickReplies.map((reply, index) => (
+                      <button 
+                        key={index} 
+                        className="quick-reply-button" 
+                        onClick={() => handleQuickReply(reply)}
+                        disabled={processingMessage}
+                      >
+                        {reply}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <form onSubmit={handleSubmit} className="message-input-form">
+                  <textarea
+                    ref={textareaRef}
+                    className="message-input-textarea"
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    placeholder={processingMessage ? "AI coach is typing..." : "Type your message here..."}
+                    disabled={processingMessage}
+                    rows={1}
+                  />
+                  <button 
+                    className="message-input-button" 
+                    type="submit"
+                    disabled={processingMessage || !text.trim()}
+                  >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="white"/>
+                    </svg>
+                  </button>
+                </form>
+              </div>
             </div>
-          </div>
-        </Channel>
-      </StreamChatComponent>
+          </Channel>
+        </StreamChatComponent>
+      </div>
     </div>
   );
 };
