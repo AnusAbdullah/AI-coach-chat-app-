@@ -318,7 +318,7 @@ const ChatComponent = ({ userId, userName }) => {
   }, [userId]); // Only re-create if userId changes
 
   // Helper function to create new channel - separate from the main createNewChannel callback
-  const createNewChannelHelper = async (client) => {
+  const createNewChannelHelper = useCallback(async (client) => {
     if (!client) {
       console.error('Cannot create new channel: client is not initialized');
       return null;
@@ -359,7 +359,7 @@ const ChatComponent = ({ userId, userName }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId]); // Include userId as a dependency since it's used in the function
 
   // Change to a different conversation channel
   const handleConversationSelect = async (channelId) => {
@@ -529,7 +529,7 @@ const ChatComponent = ({ userId, userName }) => {
       setError('Failed to create a new chat. Please try again.');
       return null;
     }
-  }, [chatClient, channel, userId, createNewChannelHelper, fetchPreviousConversations]);
+  }, [chatClient, channel, createNewChannelHelper, fetchPreviousConversations]); // Remove userId since it's not directly used here
 
   // Handle new chat button click
   const handleNewChat = useCallback(async () => {
@@ -651,7 +651,7 @@ const ChatComponent = ({ userId, userName }) => {
     return () => {
       cleanup();
     };
-  }, [userId, userName, fetchPreviousConversations]);
+  }, [userId, userName, fetchPreviousConversations, channel, createNewChannelHelper]);
 
   if (loading) {
     return (
