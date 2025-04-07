@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import ChatComponent from './components/Chat';
 import './App.css';
@@ -8,13 +8,43 @@ function App() {
   const [userName, setUserName] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
+  // Check for existing login on component mount
+  useEffect(() => {
+    const storedUserId = localStorage.getItem('aiCoachUserId');
+    const storedUserName = localStorage.getItem('aiCoachUserName');
+    
+    if (storedUserId && storedUserName) {
+      setUserId(storedUserId);
+      setUserName(storedUserName);
+      setIsLoggedIn(true);
+    }
+  }, []);
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (userName.trim()) {
-      const uniqueId = `user_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-      setUserId(uniqueId);
+      // Create a consistent user ID based on the username
+      // This ensures the same user gets the same ID across sessions
+      const cleanUsername = userName.trim().toLowerCase().replace(/\s+/g, '_');
+      const persistentId = `user_${cleanUsername}_${userName.length}`;
+      
+      // Store in state and localStorage for persistence
+      setUserId(persistentId);
+      setUserName(userName.trim());
       setIsLoggedIn(true);
+      
+      // Save to localStorage for persistent login
+      localStorage.setItem('aiCoachUserId', persistentId);
+      localStorage.setItem('aiCoachUserName', userName.trim());
     }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('aiCoachUserId');
+    localStorage.removeItem('aiCoachUserName');
+    setUserId('');
+    setUserName('');
+    setIsLoggedIn(false);
   };
 
   if (!isLoggedIn) {
@@ -47,13 +77,22 @@ function App() {
 
   return (
     <Router>
-      <Routes>
-        <Route
-          path="/chat"
-          element={<ChatComponent userId={userId} userName={userName} />}
-        />
-        <Route path="/" element={<Navigate to="/chat" />} />
-      </Routes>
+      <div className="app-container">
+        <div className="app-header">
+          <h2>AI Coach</h2>
+          <div className="user-info">
+            <span>Logged in as: {userName}</span>
+            <button onClick={handleLogout} className="logout-button">Logout</button>
+          </div>
+        </div>
+        <Routes>
+          <Route
+            path="/chat"
+            element={<ChatComponent userId={userId} userName={userName} />}
+          />
+          <Route path="/" element={<Navigate to="/chat" />} />
+        </Routes>
+      </div>
     </Router>
   );
 }
