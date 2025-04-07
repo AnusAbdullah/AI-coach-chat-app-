@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 import logging
 import google.generativeai as genai
 import re
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
+import json
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from datetime import datetime
@@ -21,12 +22,31 @@ load_dotenv(dotenv_path=".env.production")
 
 # Database setup
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Check if DATABASE_URL is set
+if not SQLALCHEMY_DATABASE_URL:
+    logger.error("DATABASE_URL environment variable is not set")
+    # Provide a fallback for development or use a SQLite database
+    SQLALCHEMY_DATABASE_URL = "sqlite:///./ai_coach.db"
+    logger.warning(f"Using fallback database: {SQLALCHEMY_DATABASE_URL}")
+
+# Format URL if it's PostgreSQL
 if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Determine if we're using SQLite
+is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Helper functions for JSON in SQLite
+def default_list():
+    return []
+
+def default_dict():
+    return {}
 
 # Database Models
 class UserModel(Base):
@@ -35,8 +55,15 @@ class UserModel(Base):
     id = Column(String, primary_key=True)
     name = Column(String)
     role = Column(String)
-    goals = Column(JSONB, default=lambda: [])
-    preferences = Column(JSONB, default=lambda: {})
+    
+    # Use different column types based on database
+    if is_sqlite:
+        goals = Column(JSON, default=default_list)
+        preferences = Column(JSON, default=default_dict)
+    else:
+        goals = Column(JSONB, default=lambda: [])
+        preferences = Column(JSONB, default=lambda: {})
+        
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -86,14 +113,37 @@ async def root():
     return {"status": "OK", "message": "AI Coach Backend is running"}
 
 # Initialize StreamChat client
-stream_client = StreamChat(
-    api_key=os.getenv("STREAM_API_KEY"),
-    api_secret=os.getenv("STREAM_API_SECRET")
-)
+try:
+    stream_api_key = os.getenv("STREAM_API_KEY")
+    stream_api_secret = os.getenv("STREAM_API_SECRET")
+    
+    if not stream_api_key or not stream_api_secret:
+        logger.error("Stream Chat API credentials are not set")
+        raise ValueError("STREAM_API_KEY and STREAM_API_SECRET are required")
+    
+    stream_client = StreamChat(
+        api_key=stream_api_key,
+        api_secret=stream_api_secret
+    )
+    logger.info("Stream Chat client initialized successfully")
+except Exception as e:
+    logger.error(f"Error initializing Stream Chat client: {str(e)}")
+    # Continue with initialization, but Stream Chat calls will fail
+    stream_client = None
 
 # Gemini configuration
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-gemini_client = genai.GenerativeModel('gemini-2.0-flash')
+try:
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_api_key:
+        logger.error("GEMINI_API_KEY environment variable is not set")
+        raise ValueError("GEMINI_API_KEY is required")
+        
+    genai.configure(api_key=gemini_api_key)
+    gemini_client = genai.GenerativeModel('gemini-2.0-flash')
+    logger.info("Gemini API configured successfully")
+except Exception as e:
+    logger.error(f"Error configuring Gemini API: {str(e)}")
+    # Continue with initialization, but Gemini calls will fail
 
 class User(BaseModel):
     id: str
@@ -226,9 +276,18 @@ async def handle_message(message: ChatMessage, db: Session = Depends(get_db)):
         # Get user's goals and preferences
         user = db.query(UserModel).filter(UserModel.id == message.user_id).first()
         user_context = {
-            "goals": user.goals if user else [],
-            "preferences": user.preferences if user else {}
+            "goals": [],
+            "preferences": {}
         }
+
+        if user:
+            # Handle both SQLite and PostgreSQL JSON data
+            if is_sqlite:
+                user_context["goals"] = user.goals if user.goals else []
+                user_context["preferences"] = user.preferences if user.preferences else {}
+            else:
+                user_context["goals"] = user.goals if user.goals else []
+                user_context["preferences"] = user.preferences if user.preferences else {}
         
         system_prompt = f"""
         You are an AI coach engaging in a one-on-one conversation with a learner. 
@@ -278,16 +337,22 @@ async def handle_message(message: ChatMessage, db: Session = Depends(get_db)):
         full_prompt = system_prompt + "\n\n" + conversation_history
 
         # Get AI response from Gemini
-        response = gemini_client.generate_content(
-            contents=full_prompt,
-            generation_config={
-                "max_output_tokens": 1000,
-                "temperature": 0.7,
-                "top_p": 0.9
-            }
-        )
-
-        ai_response = response.text
+        try:
+            logger.debug(f"Sending prompt to Gemini API. Context length: {len(full_prompt)}")
+            response = gemini_client.generate_content(
+                contents=full_prompt,
+                generation_config={
+                    "max_output_tokens": 1000,
+                    "temperature": 0.7,
+                    "top_p": 0.9
+                }
+            )
+            ai_response = response.text
+            logger.debug(f"Received response from Gemini API. Length: {len(ai_response)}")
+        except Exception as e:
+            logger.error(f"Error from Gemini API: {str(e)}")
+            # Provide a fallback response
+            ai_response = "I'm having trouble processing your request right now. Let's try a different approach. Could you tell me more about what you'd like to discuss today?"
 
         # Save AI response
         ai_message = MessageModel(
@@ -311,13 +376,33 @@ async def update_user_memory(user_id: str, memory_data: dict, db: Session = Depe
     
     try:
         if "goals" in memory_data:
-            user.goals = memory_data["goals"]
+            # Handle both SQLite and PostgreSQL
+            if isinstance(memory_data["goals"], list):
+                user.goals = memory_data["goals"]
+            else:
+                logger.warning(f"Invalid goals format: {memory_data['goals']}")
+                
         if "preferences" in memory_data:
-            user.preferences.update(memory_data["preferences"])
+            # Handle both SQLite and PostgreSQL
+            if isinstance(memory_data["preferences"], dict):
+                if is_sqlite:
+                    # For SQLite, we need to replace the entire dictionary
+                    current_prefs = user.preferences if user.preferences else {}
+                    updated_prefs = {**current_prefs, **memory_data["preferences"]}
+                    user.preferences = updated_prefs
+                else:
+                    # For PostgreSQL, update method works
+                    if not user.preferences:
+                        user.preferences = {}
+                    user.preferences.update(memory_data["preferences"])
+            else:
+                logger.warning(f"Invalid preferences format: {memory_data['preferences']}")
         
         db.commit()
         return {"message": "Memory updated successfully"}
     except Exception as e:
+        logger.error(f"Error updating memory: {str(e)}")
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/memory/{user_id}")
@@ -325,6 +410,22 @@ async def get_user_memory(user_id: str, db: Session = Depends(get_db)):
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    # Safely get the JSON fields
+    goals = []
+    preferences = {}
+    
+    try:
+        if user.goals:
+            goals = user.goals
+    except Exception as e:
+        logger.error(f"Error retrieving goals: {str(e)}")
+        
+    try:
+        if user.preferences:
+            preferences = user.preferences
+    except Exception as e:
+        logger.error(f"Error retrieving preferences: {str(e)}")
     
     # Get all conversations for the user
     conversations = db.query(ConversationModel).filter(
@@ -334,18 +435,21 @@ async def get_user_memory(user_id: str, db: Session = Depends(get_db)):
     # Get messages for each conversation
     conversation_history = []
     for conv in conversations:
-        messages = db.query(MessageModel).filter(
-            MessageModel.conversation_id == conv.id
-        ).order_by(MessageModel.created_at).all()
-        
-        conversation_history.append({
-            "channel_id": conv.channel_id,
-            "messages": [{"role": msg.role, "content": msg.content} for msg in messages]
-        })
+        try:
+            messages = db.query(MessageModel).filter(
+                MessageModel.conversation_id == conv.id
+            ).order_by(MessageModel.created_at).all()
+            
+            conversation_history.append({
+                "channel_id": conv.channel_id,
+                "messages": [{"role": msg.role, "content": msg.content} for msg in messages]
+            })
+        except Exception as e:
+            logger.error(f"Error retrieving messages for conversation {conv.id}: {str(e)}")
     
     return {
-        "goals": user.goals,
-        "preferences": user.preferences,
+        "goals": goals,
+        "preferences": preferences,
         "conversation_history": conversation_history
     }
 
