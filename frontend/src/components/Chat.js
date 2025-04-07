@@ -268,7 +268,6 @@ const ChatComponent = ({ userId, userName }) => {
   const [previousConversations, setPreviousConversations] = useState([]);
   const [showPreviousConversations, setShowPreviousConversations] = useState(true);
   const textareaRef = useRef(null);
-  const welcomeMessageSentRef = useRef(false);
 
   const quickReplies = [
     "Tell me more about coaching",
@@ -451,7 +450,7 @@ const ChatComponent = ({ userId, userName }) => {
   };
 
   // Create a new chat channel
-  const createNewChannel = async () => {
+  const createNewChannel = useCallback(async () => {
     if (!chatClient) {
       setError('Chat connection error. Please reload the page.');
       return null;
@@ -508,7 +507,7 @@ const ChatComponent = ({ userId, userName }) => {
       setLoading(false);
       return null;
     }
-  };
+  }, [chatClient, channel, userId, fetchPreviousConversations]);
 
   // Handle new chat button click
   const handleNewChat = async () => {
@@ -640,7 +639,7 @@ const ChatComponent = ({ userId, userName }) => {
     return () => {
       cleanup();
     };
-  }, [userId, userName, fetchPreviousConversations]);
+  }, [userId, userName, fetchPreviousConversations, createNewChannel]);
 
   if (loading) {
     return (
