@@ -303,16 +303,63 @@ const ChatComponent = ({ userId, userName }) => {
         
         console.log('Sorted conversations:', sortedConversations.length, 'conversations found');
         setPreviousConversations(sortedConversations);
+        return sortedConversations; // Return the conversations for use by other functions
       } else {
         console.warn('Invalid conversation history data format:', response.data);
         setPreviousConversations([]);
+        return [];
       }
     } catch (error) {
       console.error('Error fetching previous conversations:', error);
       // Don't show error to user, just log it and continue with empty conversations
       setPreviousConversations([]);
+      return [];
     }
   }, [userId]); // Only re-create if userId changes
+
+  // Helper function to create new channel - separate from the main createNewChannel callback
+  const createNewChannelHelper = async (client) => {
+    if (!client) {
+      console.error('Cannot create new channel: client is not initialized');
+      return null;
+    }
+    
+    try {
+      setLoading(true);
+      
+      // Create a new channel
+      const channelResponse = await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`);
+      
+      if (!channelResponse.data?.channel_id) {
+        throw new Error('Failed to create new channel');
+      }
+      
+      // Create and watch the new channel
+      const newChannel = client.channel('messaging', channelResponse.data.channel_id, {
+        name: 'AI Coach Chat',
+        image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
+      });
+      
+      await newChannel.watch();
+      
+      // Send welcome message
+      await newChannel.sendMessage({
+        text: "Hello! I'm your AI coach. How can I help you today?",
+        user: {
+          id: 'ai_coach_1',
+          name: 'AI Coach',
+          image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
+        }
+      });
+      
+      return newChannel;
+    } catch (error) {
+      console.error('Error creating new channel helper:', error);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Change to a different conversation channel
   const handleConversationSelect = async (channelId) => {
@@ -457,15 +504,6 @@ const ChatComponent = ({ userId, userName }) => {
     }
     
     try {
-      setLoading(true);
-      
-      // Create a new channel
-      const channelResponse = await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`);
-      
-      if (!channelResponse.data?.channel_id) {
-        throw new Error('Failed to create new channel');
-      }
-      
       // Clean up current channel if exists
       if (channel) {
         channel.off();
@@ -476,57 +514,43 @@ const ChatComponent = ({ userId, userName }) => {
         }
       }
       
-      // Create and watch the new channel
-      const newChannel = chatClient.channel('messaging', channelResponse.data.channel_id, {
-        name: 'AI Coach Chat',
-        image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
-      });
+      // Create the new channel using the helper
+      const newChannel = await createNewChannelHelper(chatClient);
       
-      await newChannel.watch();
-      
-      // Send welcome message
-      await newChannel.sendMessage({
-        text: "Hello! I'm your AI coach. How can I help you today?",
-        user: {
-          id: 'ai_coach_1',
-          name: 'AI Coach',
-          image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
-        }
-      });
-      
-      setChannel(newChannel);
-      setLoading(false);
-      
-      // Refresh conversation list
-      fetchPreviousConversations();
+      if (newChannel) {
+        setChannel(newChannel);
+        // Refresh conversation list after creating a new channel
+        fetchPreviousConversations();
+      }
       
       return newChannel;
     } catch (error) {
       console.error('Error creating new chat:', error);
       setError('Failed to create a new chat. Please try again.');
-      setLoading(false);
       return null;
     }
-  }, [chatClient, channel, userId, fetchPreviousConversations]);
+  }, [chatClient, channel, userId, createNewChannelHelper, fetchPreviousConversations]);
 
   // Handle new chat button click
-  const handleNewChat = async () => {
+  const handleNewChat = useCallback(async () => {
     await createNewChannel();
     // Hide previous conversations panel after creating new chat
     setShowPreviousConversations(false);
-  };
+  }, [createNewChannel]);
 
-  // Update the useEffect to create a new channel only if no conversation history exists
+  // Update the useEffect to handle initialization properly
   useEffect(() => {
     let client;
-    let currentChannel;
 
     const initChat = async () => {
       try {
+        setLoading(true);
+        
         if (!userId || !userName) {
           throw new Error('User ID and name are required');
         }
 
+        console.log('Initializing chat for user:', userId);
         client = StreamChat.getInstance(process.env.REACT_APP_STREAM_API_KEY);
         
         if (!client) {
@@ -552,61 +576,49 @@ const ChatComponent = ({ userId, userName }) => {
         
         // Fetch previous conversations first
         setLoadingPreviousChats(true);
+        let conversations = [];
+        
         try {
-          const memoryResponse = await axios.get(`${API_URL}/memory/${userId}`);
-          console.log('Memory API response:', memoryResponse.data);
+          conversations = await fetchPreviousConversations();
           
-          if (memoryResponse.data && Array.isArray(memoryResponse.data.conversation_history)) {
-            // Sort conversations by most recent first
-            const sortedConversations = [...memoryResponse.data.conversation_history].sort((a, b) => {
-              const aDate = a.messages && a.messages.length > 0 && a.messages[0].created_at
-                ? new Date(a.messages[0].created_at) 
-                : new Date(0);
-              const bDate = b.messages && b.messages.length > 0 && b.messages[0].created_at
-                ? new Date(b.messages[0].created_at)
-                : new Date(0);
-              return bDate - aDate;
-            });
+          // If there's at least one previous conversation, load the most recent one
+          if (conversations && conversations.length > 0) {
+            const mostRecentConversation = conversations[0];
             
-            setPreviousConversations(sortedConversations);
-            
-            // If there's at least one previous conversation, load the most recent one
-            if (sortedConversations.length > 0) {
-              const mostRecentConversation = sortedConversations[0];
+            // Load the most recent conversation
+            if (mostRecentConversation.channel_id) {
+              const existingChannel = client.channel('messaging', mostRecentConversation.channel_id, {
+                name: 'AI Coach Chat',
+                image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
+              });
               
-              // Load the most recent conversation
-              if (mostRecentConversation.channel_id) {
-                currentChannel = client.channel('messaging', mostRecentConversation.channel_id, {
-                  name: 'AI Coach Chat',
-                  image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
-                });
-                
-                await currentChannel.watch();
-                setChannel(currentChannel);
-                setLoading(false);
-              } else {
-                // No valid channel ID, create a new one
-                currentChannel = await createNewChannel();
-              }
+              await existingChannel.watch();
+              setChannel(existingChannel);
             } else {
-              // No previous conversations, create a new channel
-              currentChannel = await createNewChannel();
+              // No valid channel ID, create a new one
+              await createNewChannelHelper(client).then(newChannel => {
+                if (newChannel) setChannel(newChannel);
+              });
             }
           } else {
-            // No valid conversation history, create a new channel
-            currentChannel = await createNewChannel();
+            // No previous conversations, create a new channel
+            await createNewChannelHelper(client).then(newChannel => {
+              if (newChannel) setChannel(newChannel);
+            });
           }
         } catch (memoryError) {
-          console.error('Error fetching memory:', memoryError);
+          console.error('Error handling memory/channels:', memoryError);
           // If we can't fetch memory, create a new channel
-          currentChannel = await createNewChannel();
+          await createNewChannelHelper(client).then(newChannel => {
+            if (newChannel) setChannel(newChannel);
+          });
         } finally {
           setLoadingPreviousChats(false);
+          setLoading(false);
         }
-        
       } catch (error) {
-        console.error('Error initializing chat:', error);
-        setError(error.message);
+        console.error('Error in chat initialization:', error);
+        setError(error.message || 'Failed to initialize chat. Please try again.');
         setLoading(false);
       }
     };
@@ -614,10 +626,10 @@ const ChatComponent = ({ userId, userName }) => {
     const cleanup = async () => {
       setProcessingMessage(false);
       
-      if (currentChannel) {
-        currentChannel.off();
+      if (channel) {
+        channel.off();
         try {
-          await currentChannel.stopWatching();
+          await channel.stopWatching();
         } catch (e) {
           console.log('Error stopping channel watch:', e);
         }
@@ -639,7 +651,7 @@ const ChatComponent = ({ userId, userName }) => {
     return () => {
       cleanup();
     };
-  }, [userId, userName, fetchPreviousConversations, createNewChannel]);
+  }, [userId, userName, fetchPreviousConversations]);
 
   if (loading) {
     return (
