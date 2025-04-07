@@ -328,33 +328,49 @@ const ChatComponent = ({ userId, userName }) => {
       setLoading(true);
       
       // Create a new channel
-      const channelResponse = await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`);
+      console.log('Creating new channel for user:', userId);
+      console.log('API URL being used:', `${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`);
       
-      if (!channelResponse.data?.channel_id) {
-        throw new Error('Failed to create new channel');
-      }
-      
-      // Create and watch the new channel
-      const newChannel = client.channel('messaging', channelResponse.data.channel_id, {
-        name: 'AI Coach Chat',
-        image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
-      });
-      
-      await newChannel.watch();
-      
-      // Send welcome message
-      await newChannel.sendMessage({
-        text: "Hello! I'm your AI coach. How can I help you today?",
-        user: {
-          id: 'ai_coach_1',
-          name: 'AI Coach',
-          image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
+      try {
+        const channelResponse = await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`);
+        console.log('Channel creation response:', channelResponse);
+        
+        if (!channelResponse.data?.channel_id) {
+          console.error('Channel response missing channel_id:', channelResponse.data);
+          throw new Error('Failed to create new channel: No channel ID returned');
         }
-      });
-      
-      return newChannel;
+        
+        // Create and watch the new channel
+        console.log('Creating Stream channel with ID:', channelResponse.data.channel_id);
+        const newChannel = client.channel('messaging', channelResponse.data.channel_id, {
+          name: 'AI Coach Chat',
+          image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
+        });
+        
+        await newChannel.watch();
+        console.log('Successfully watching new channel');
+        
+        // Send welcome message
+        await newChannel.sendMessage({
+          text: "Hello! I'm your AI coach. How can I help you today?",
+          user: {
+            id: 'ai_coach_1',
+            name: 'AI Coach',
+            image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
+          }
+        });
+        console.log('Successfully sent welcome message');
+        
+        return newChannel;
+      } catch (apiError) {
+        console.error('API error during channel creation:', apiError);
+        console.error('API error details:', apiError.response?.data || 'No response data');
+        throw apiError;
+      }
     } catch (error) {
       console.error('Error creating new channel helper:', error);
+      console.error('Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      setError(`Failed to create a new chat: ${error.message || 'Unknown error'}`);
       return null;
     } finally {
       setLoading(false);
@@ -504,23 +520,32 @@ const ChatComponent = ({ userId, userName }) => {
     }
     
     try {
+      setLoading(true);
+      
       // Clean up current channel if exists
       if (channel) {
+        console.log('Stopping previous channel watch before creating new channel');
         channel.off();
         try {
           await channel.stopWatching();
         } catch (e) {
           console.warn('Error stopping previous channel watch:', e);
+          // Continue despite error
         }
       }
       
       // Create the new channel using the helper
+      console.log('Creating new channel');
       const newChannel = await createNewChannelHelper(chatClient);
       
       if (newChannel) {
+        console.log('New channel created successfully, updating state');
         setChannel(newChannel);
         // Refresh conversation list after creating a new channel
         fetchPreviousConversations();
+      } else {
+        console.error('Failed to create new channel - helper returned null');
+        setError('Failed to create a new chat. Please try again.');
       }
       
       return newChannel;
@@ -528,8 +553,10 @@ const ChatComponent = ({ userId, userName }) => {
       console.error('Error creating new chat:', error);
       setError('Failed to create a new chat. Please try again.');
       return null;
+    } finally {
+      setLoading(false);
     }
-  }, [chatClient, channel, createNewChannelHelper, fetchPreviousConversations]); // Remove userId since it's not directly used here
+  }, [chatClient, channel, createNewChannelHelper, fetchPreviousConversations]);
 
   // Handle new chat button click
   const handleNewChat = useCallback(async () => {
@@ -541,8 +568,41 @@ const ChatComponent = ({ userId, userName }) => {
   // Update the useEffect to handle initialization properly
   useEffect(() => {
     let client;
+    let isMounted = true; // Add mounted flag to prevent state updates after unmount
+    
+    // Move cleanup to a separate function
+    const cleanup = async () => {
+      console.log('Running cleanup...');
+      setProcessingMessage(false);
+      
+      // First set states to null to prevent component from using disconnected resources
+      if (isMounted) {
+        setChannel(null);
+        setChatClient(null);
+      }
+      
+      // Then actually clean up resources
+      try {
+        if (channel) {
+          console.log('Cleaning up channel...');
+          channel.off();
+          await channel.stopWatching().catch(e => console.log('Error stopping channel watch:', e));
+        }
+        
+        if (client) {
+          console.log('Disconnecting client...');
+          await client.disconnectUser().catch(e => console.log('Error disconnecting user:', e));
+          client = null;
+        }
+      } catch (e) {
+        console.log('Error in cleanup:', e);
+      }
+    };
 
     const initChat = async () => {
+      // Don't try to initialize if previous cleanup is still in progress
+      if (!isMounted) return;
+      
       try {
         setLoading(true);
         
@@ -557,12 +617,15 @@ const ChatComponent = ({ userId, userName }) => {
           throw new Error('Failed to initialize Stream Chat client');
         }
 
+        // Get token and connect user
+        console.log('Getting token...');
         const tokenResponse = await axios.post(`${API_URL}/chat/token/?user_id=${userId}`);
         
         if (!tokenResponse.data?.token) {
           throw new Error('Failed to get chat token');
         }
 
+        console.log('Connecting user...');
         await client.connectUser(
           {
             id: userId,
@@ -572,9 +635,18 @@ const ChatComponent = ({ userId, userName }) => {
           tokenResponse.data.token
         );
 
+        // Only update state if component is still mounted
+        if (!isMounted) {
+          console.log('Component unmounted during initialization, aborting');
+          cleanup();
+          return;
+        }
+        
+        // Set chat client first
         setChatClient(client);
         
         // Fetch previous conversations first
+        console.log('Loading previous chats...');
         setLoadingPreviousChats(true);
         let conversations = [];
         
@@ -582,76 +654,75 @@ const ChatComponent = ({ userId, userName }) => {
           conversations = await fetchPreviousConversations();
           
           // If there's at least one previous conversation, load the most recent one
-          if (conversations && conversations.length > 0) {
+          if (conversations && conversations.length > 0 && isMounted) {
             const mostRecentConversation = conversations[0];
             
             // Load the most recent conversation
             if (mostRecentConversation.channel_id) {
+              console.log('Loading existing channel:', mostRecentConversation.channel_id);
               const existingChannel = client.channel('messaging', mostRecentConversation.channel_id, {
                 name: 'AI Coach Chat',
                 image: 'https://ui-avatars.com/api/?name=AI+Coach&background=007bff&color=fff',
               });
               
               await existingChannel.watch();
-              setChannel(existingChannel);
+              
+              if (isMounted) {
+                setChannel(existingChannel);
+              }
             } else {
               // No valid channel ID, create a new one
-              await createNewChannelHelper(client).then(newChannel => {
-                if (newChannel) setChannel(newChannel);
-              });
+              console.log('No channel ID, creating new one');
+              if (isMounted) {
+                const newChannel = await createNewChannelHelper(client);
+                if (newChannel && isMounted) setChannel(newChannel);
+              }
             }
-          } else {
+          } else if (isMounted) {
             // No previous conversations, create a new channel
-            await createNewChannelHelper(client).then(newChannel => {
-              if (newChannel) setChannel(newChannel);
-            });
+            console.log('No previous conversations, creating new channel');
+            const newChannel = await createNewChannelHelper(client);
+            if (newChannel && isMounted) setChannel(newChannel);
           }
         } catch (memoryError) {
           console.error('Error handling memory/channels:', memoryError);
           // If we can't fetch memory, create a new channel
-          await createNewChannelHelper(client).then(newChannel => {
-            if (newChannel) setChannel(newChannel);
-          });
+          if (isMounted) {
+            console.log('Error with memory, creating fallback channel');
+            const newChannel = await createNewChannelHelper(client);
+            if (newChannel && isMounted) setChannel(newChannel);
+          }
         } finally {
-          setLoadingPreviousChats(false);
-          setLoading(false);
+          if (isMounted) {
+            setLoadingPreviousChats(false);
+            setLoading(false);
+          }
         }
       } catch (error) {
         console.error('Error in chat initialization:', error);
-        setError(error.message || 'Failed to initialize chat. Please try again.');
-        setLoading(false);
+        if (isMounted) {
+          setError(error.message || 'Failed to initialize chat. Please try again.');
+          setLoading(false);
+        }
       }
     };
 
-    const cleanup = async () => {
-      setProcessingMessage(false);
-      
-      if (channel) {
-        channel.off();
-        try {
-          await channel.stopWatching();
-        } catch (e) {
-          console.log('Error stopping channel watch:', e);
-        }
-      }
-      
-      if (client) {
-        try {
-          await client.disconnectUser();
-        } catch (e) {
-          console.log('Error disconnecting user:', e);
-        }
-        setChatClient(null);
-        setChannel(null);
-      }
+    // Properly sequence cleanup and initialization
+    const initialize = async () => {
+      await cleanup();
+      await initChat();
     };
 
-    cleanup().then(() => initChat());
+    // Start initialization
+    initialize();
 
+    // Handle component unmount
     return () => {
+      console.log('Component unmounting, cleaning up...');
+      isMounted = false;
       cleanup();
     };
-  }, [userId, userName, fetchPreviousConversations, channel, createNewChannelHelper]);
+  }, [userId, userName, fetchPreviousConversations, createNewChannelHelper]);
 
   if (loading) {
     return (
