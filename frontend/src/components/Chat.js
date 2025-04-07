@@ -21,10 +21,9 @@ const customTheme = {
 };
 
 // Previous Conversations component
-const PreviousConversations = ({ conversations, onConversationSelect, isOpen, toggleOpen }) => {
-  if (!conversations || conversations.length === 0) {
-    return null;
-  }
+const PreviousConversations = ({ conversations, onConversationSelect, isOpen, toggleOpen, onRefresh }) => {
+  // Don't return null even when empty, so the sidebar is always visible
+  const isEmpty = !conversations || conversations.length === 0;
 
   // Format date for conversation groups
   const formatDate = (dateString) => {
@@ -40,51 +39,61 @@ const PreviousConversations = ({ conversations, onConversationSelect, isOpen, to
 
   return (
     <div className="previous-conversations-container">
-      <div className="previous-conversations-header" onClick={toggleOpen}>
-        <h3>Previous Conversations {isOpen ? '▼' : '▶'}</h3>
+      <div className="previous-conversations-header">
+        <h3 onClick={toggleOpen}>Previous Conversations {isOpen ? '▼' : '▶'}</h3>
+        <button className="refresh-button" onClick={onRefresh} title="Refresh conversation history">
+          ⟳
+        </button>
       </div>
       
       {isOpen && (
         <div className="previous-conversations-list">
-          {conversations.map((conversation, index) => {
-            if (!conversation || !conversation.messages) {
-              return null; // Skip invalid conversations
-            }
-            
-            // Get the first few messages to show as preview
-            const previewMessages = conversation.messages.slice(0, 2);
-            let conversationDate = 'Unknown date';
-            
-            if (conversation.messages.length > 0 && conversation.messages[0].created_at) {
-              conversationDate = formatDate(conversation.messages[0].created_at);
-            }
-            
-            return (
-              <div 
-                key={conversation.channel_id || index} 
-                className="previous-conversation-item"
-                onClick={() => onConversationSelect(conversation.channel_id)}
-              >
-                <div className="conversation-date">{conversationDate}</div>
-                <div className="conversation-preview">
-                  {previewMessages.map((msg, i) => {
-                    if (!msg || !msg.content) return null;
-                    
-                    return (
-                      <div key={i} className="preview-message">
-                        <span className={`preview-author ${msg.role === 'assistant' ? 'ai-author' : 'user-author'}`}>
-                          {msg.role === 'assistant' ? 'AI: ' : 'You: '}
-                        </span>
-                        <span className="preview-text">
-                          {msg.content.length > 40 ? msg.content.substring(0, 40) + '...' : msg.content}
-                        </span>
-                      </div>
-                    );
-                  })}
+          {isEmpty ? (
+            <div className="empty-conversations-message">
+              <p>No previous conversations found.</p>
+              <p>Your chat history will appear here after you've had multiple conversations.</p>
+            </div>
+          ) : (
+            conversations.map((conversation, index) => {
+              if (!conversation || !conversation.messages) {
+                return null; // Skip invalid conversations
+              }
+              
+              // Get the first few messages to show as preview
+              const previewMessages = conversation.messages.slice(0, 2);
+              let conversationDate = 'Unknown date';
+              
+              if (conversation.messages.length > 0 && conversation.messages[0].created_at) {
+                conversationDate = formatDate(conversation.messages[0].created_at);
+              }
+              
+              return (
+                <div 
+                  key={conversation.channel_id || index} 
+                  className="previous-conversation-item"
+                  onClick={() => onConversationSelect(conversation.channel_id)}
+                >
+                  <div className="conversation-date">{conversationDate}</div>
+                  <div className="conversation-preview">
+                    {previewMessages.map((msg, i) => {
+                      if (!msg || !msg.content) return null;
+                      
+                      return (
+                        <div key={i} className="preview-message">
+                          <span className={`preview-author ${msg.role === 'assistant' ? 'ai-author' : 'user-author'}`}>
+                            {msg.role === 'assistant' ? 'AI: ' : 'You: '}
+                          </span>
+                          <span className="preview-text">
+                            {msg.content.length > 40 ? msg.content.substring(0, 40) + '...' : msg.content}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       )}
     </div>
@@ -250,8 +259,11 @@ const ChatComponent = ({ userId, userName }) => {
       return;
     }
     
+    console.log('Fetching previous conversations for user:', userId);
+    
     try {
       const response = await axios.get(`${API_URL}/memory/${userId}`);
+      console.log('Previous conversations API response:', response.data);
       
       if (response.data && Array.isArray(response.data.conversation_history)) {
         // Sort conversations by most recent first
@@ -265,6 +277,7 @@ const ChatComponent = ({ userId, userName }) => {
           return bDate - aDate;
         });
         
+        console.log('Sorted conversations:', sortedConversations.length, 'conversations found');
         setPreviousConversations(sortedConversations);
       } else {
         console.warn('Invalid conversation history data format:', response.data);
@@ -563,6 +576,7 @@ const ChatComponent = ({ userId, userName }) => {
         onConversationSelect={handleConversationSelect}
         isOpen={showPreviousConversations}
         toggleOpen={() => setShowPreviousConversations(!showPreviousConversations)}
+        onRefresh={fetchPreviousConversations}
       />
       
       <div className="chat-container">

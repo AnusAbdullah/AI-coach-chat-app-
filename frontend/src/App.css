@@ -471,6 +471,7 @@ html, body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex-shrink: 0; /* Prevent sidebar from shrinking */
 }
 
 /* Header for previous conversations */
@@ -478,7 +479,6 @@ html, body {
   padding: 15px;
   background-color: #007bff;
   color: white;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -487,6 +487,27 @@ html, body {
 .previous-conversations-header h3 {
   margin: 0;
   font-size: 16px;
+  cursor: pointer;
+}
+
+/* Refresh button */
+.refresh-button {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 18px;
+  cursor: pointer;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.2s;
+}
+
+.refresh-button:hover {
+  background-color: rgba(255, 255, 255, 0.2);
 }
 
 /* List of previous conversations */
@@ -569,4 +590,20 @@ html, body {
   .previous-conversations-list {
     max-height: calc(40vh - 50px);
   }
+}
+
+/* Empty conversations message */
+.empty-conversations-message {
+  padding: 20px;
+  text-align: center;
+  color: #666;
+  font-size: 14px;
+  line-height: 1.5;
+  background-color: rgba(255, 255, 255, 0.7);
+  border-radius: 8px;
+  margin: 10px;
+}
+
+.empty-conversations-message p {
+  margin: 8px 0;
 }
