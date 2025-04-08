@@ -190,6 +190,8 @@ async def create_user(user: User, db: Session = Depends(get_db)):
 @app.post("/chat/token/")
 async def get_chat_token(user_id: str, db: Session = Depends(get_db)):
     try:
+        logger.info(f"Received token request for user_id: {user_id}")
+        
         # Check if user exists, create if not
         user = db.query(UserModel).filter(UserModel.id == user_id).first()
         if not user:
@@ -216,10 +218,23 @@ async def get_chat_token(user_id: str, db: Session = Depends(get_db)):
                         "name": user_name
                     }
                     stream_client.upsert_user(user_data)
+                    logger.info(f"Successfully created user in Stream: {user_id}")
+                else:
+                    logger.error("Stream client is not initialized")
+                    raise ValueError("Stream client is not initialized")
             except Exception as e:
                 logger.error(f"Error creating user in Stream: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Failed to create user in Stream: {str(e)}")
         
+        # Generate token
+        if not stream_client:
+            logger.error("Stream client is not initialized, cannot generate token")
+            raise HTTPException(status_code=500, detail="Stream client is not initialized")
+        
+        logger.info(f"Generating token for user: {user_id}")
         token = stream_client.create_token(user_id)
+        logger.info(f"Token generated successfully: {token[:20]}... (masked)")
+        
         return {"token": token}
     except Exception as e:
         logger.error(f"Error creating chat token: {str(e)}")
