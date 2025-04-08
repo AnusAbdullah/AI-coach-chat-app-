@@ -1,7 +1,7 @@
 import React from 'react';
 
 // Previous Conversations component
-const PreviousConversations = ({ conversations, onConversationSelect, isOpen, toggleOpen, onRefresh, isLoading }) => {
+const PreviousConversations = ({ conversations, onConversationSelect, isOpen, toggleOpen, onRefresh, onNewChat, isLoading }) => {
   // Don't return null even when empty, so the sidebar is always visible
   const isEmpty = !conversations || conversations.length === 0;
 
@@ -44,6 +44,12 @@ const PreviousConversations = ({ conversations, onConversationSelect, isOpen, to
       </div>
       
       <div className="previous-conversations-list">
+        <div className="new-chat-button-container">
+          <button className="new-chat-button" onClick={onNewChat}>
+            <span className="plus-icon">+</span> New Chat
+          </button>
+        </div>
+        
         {isLoading ? (
           <div className="conversations-loading">
             <div className="conversations-loading-spinner"></div>

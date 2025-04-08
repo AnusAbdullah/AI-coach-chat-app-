@@ -243,12 +243,12 @@ const ChatComponent = ({ userId, userName }) => {
     }
   }, [userId]);
 
-  // Helper function to create new channel - with better error handling
+  // Helper function to create new channel - with better error handling and connection validation
   // eslint-disable-next-line no-unused-vars
   const createNewChannelHelper = useCallback(async (client) => {
     if (!client) {
       console.error('Cannot create new channel: client is not initialized');
-      return null;
+      throw new Error('Chat client not initialized');
     }
     
     try {
@@ -266,69 +266,116 @@ const ChatComponent = ({ userId, userName }) => {
         }
       }
       
-      // First check if client is properly connected
-      if (!client.user || !client._isConnected) {
-        console.error('Stream client not properly connected:', 
-                      client.user ? 'Has user' : 'No user', 
-                      client._isConnected ? 'Connected' : 'Not connected');
-        throw new Error('Stream client not connected');
+      // Verify client connection state using multiple methods
+      let isConnected = false;
+      
+      // Method 1: Check internal flags
+      const hasUser = !!client.user;
+      const hasInternalConnection = !!client._isConnected;
+      
+      // Method 2: Check websocket status
+      let wsStatus = 'unknown';
+      try {
+        wsStatus = client.wsConnection?.connectionStatus();
+      } catch (wsErr) {
+        console.warn('Error checking WebSocket status:', wsErr);
+      }
+      
+      // Method 3: Try a simple query
+      let querySuccess = false;
+      try {
+        const response = await client.queryChannels({}, {}, { limit: 1 });
+        querySuccess = Array.isArray(response);
+      } catch (queryErr) {
+        console.warn('Connection test query failed:', queryErr);
+      }
+      
+      // Determine if connected based on all checks
+      isConnected = hasUser && (hasInternalConnection || wsStatus === 'connected' || querySuccess);
+      
+      console.log('Connection validation results:', {
+        hasUser,
+        hasInternalConnection,
+        wsStatus,
+        querySuccess,
+        isConnected
+      });
+      
+      if (!isConnected) {
+        throw new Error('Stream client not connected. Please try refreshing the page.');
       }
       
       // Generate a unique ID
       const uniqueId = `${userId}-${Date.now()}`;
       console.log('Creating direct Stream channel with ID:', uniqueId);
       
-      // Force a connection status check
+      // Try to ensure connection is active
       try {
         await client.wsConnection.checkConnectionAndReconnect();
       } catch (connErr) {
         console.log('Connection check error (continuing):', connErr);
       }
       
-      // Create the Stream Chat channel directly with explicit options
+      // Create the Stream Chat channel
       const newChannel = client.channel('messaging', uniqueId, {
         name: 'AI Coach Chat',
         members: [userId, 'ai_coach_1'],
         created_by_id: userId
       });
       
-      // First try to create channel
+      // Create and watch channel with better error handling
+      let channelCreated = false;
+      let channelWatched = false;
+      
+      // Step 1: Create channel
       try {
         await newChannel.create();
         console.log('Stream channel created successfully');
+        channelCreated = true;
       } catch (createErr) {
-        console.error('Error creating channel, trying to watch instead:', createErr);
+        console.error('Error creating channel:', createErr);
+        // Continue to watching step - it might still work
       }
       
-      // Then try to watch channel (even if create failed)
+      // Step 2: Watch channel 
       try {
         await newChannel.watch();
         console.log('Successfully watching Stream channel:', uniqueId);
+        channelWatched = true;
       } catch (watchErr) {
         console.error('Error watching channel:', watchErr);
-        throw watchErr;
+        
+        if (!channelCreated) {
+          // Both creation and watching failed - likely a connection issue
+          throw new Error('Could not create or watch the channel. Connection may be lost.');
+        }
       }
       
-      // Register with backend only after successful Stream channel creation
+      if (!channelWatched) {
+        throw new Error('Created channel but failed to watch it');
+      }
+      
+      // Step 3: Register with backend
       try {
-        await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`, {
+        const backendResponse = await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`, {
           channel_id: uniqueId
         });
-        console.log('Backend channel registration successful');
+        console.log('Backend channel registration successful:', backendResponse.data);
       } catch (backendError) {
-        // Continue even if backend registration fails
-        console.warn('Backend channel registration failed, continuing with Stream channel:', backendError);
+        console.warn('Backend channel registration failed:', backendError);
+        // Continue even if backend registration fails as Stream channel is working
       }
       
-      // Send welcome message
+      // Step 4: Send welcome message
       try {
         await newChannel.sendMessage({
           text: "Hello! I'm your AI coach. How can I help you today?",
           user: { id: 'ai_coach_1', name: 'AI Coach' }
         });
+        console.log('Welcome message sent successfully');
       } catch (msgErr) {
         console.warn('Failed to send welcome message:', msgErr);
-        // Continue anyway - not critical
+        // Not critical, continue anyway
       }
       
       return newChannel;
@@ -340,6 +387,93 @@ const ChatComponent = ({ userId, userName }) => {
       setConnectionStatus('');
     }
   }, [userId, channel]);
+
+  // Handle new chat creation with fresh client instance approach
+  const handleNewChat = useCallback(async () => {
+    try {
+      console.log('Creating new chat...');
+      setError(null);
+      setText('');
+      setShowQuickReplies(true);
+      setLoading(true);
+      
+      // Create a completely fresh client instance
+      console.log('Creating fresh Stream Chat client for new chat...');
+      const freshClient = StreamChat.getInstance(STREAM_API_KEY, {
+        timeout: 10000,
+        logger: { logLevel: 'debug' }
+      });
+      
+      // Request new token
+      console.log('Requesting fresh token...');
+      const tokenResponse = await axios.post(`${API_URL}/chat/token/?user_id=${userId}`);
+      if (!tokenResponse.data?.token) {
+        throw new Error('Could not get authentication token');
+      }
+      
+      // Connect user
+      console.log('Connecting user to fresh client...');
+      await freshClient.connectUser(
+        {
+          id: userId,
+          name: userName,
+          image: `https://ui-avatars.com/api/?name=${encodeURIComponent(userName)}&background=random`,
+        },
+        tokenResponse.data.token
+      );
+      
+      // Wait for connection to establish
+      console.log('Waiting for connection to stabilize...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Create a unique ID for the new channel
+      const uniqueId = `${userId}-${Date.now()}`;
+      console.log('Creating new channel with ID:', uniqueId);
+      
+      // Create the Stream Chat channel
+      const newChannel = freshClient.channel('messaging', uniqueId, {
+        name: 'AI Coach Chat',
+        members: [userId, 'ai_coach_1'],
+        created_by_id: userId
+      });
+      
+      // Create and watch channel
+      console.log('Creating channel...');
+      await newChannel.create();
+      console.log('Watching channel...');
+      await newChannel.watch();
+      
+      // Register with backend
+      console.log('Registering channel with backend...');
+      await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`, {
+        channel_id: uniqueId
+      });
+      
+      // Send welcome message
+      console.log('Sending welcome message...');
+      await newChannel.sendMessage({
+        text: "Hello! I'm your AI coach. How can I help you today?",
+        user: { id: 'ai_coach_1', name: 'AI Coach' }
+      });
+      
+      // Update state with the new client and channel
+      console.log('Updating app state with new client and channel...');
+      setChatClient(freshClient);
+      setChannel(newChannel);
+      setIsClientConnected(true);
+      
+      // Refresh conversation list
+      fetchPreviousConversations();
+      if (window.innerWidth < 768) setShowPreviousConversations(false);
+      
+      console.log('New chat created successfully!');
+      setLoading(false);
+    } catch (error) {
+      console.error('Error in handleNewChat:', error);
+      setError(`Failed to create a new chat: ${error.message || 'Unknown error'}`);
+      setLoading(false);
+    }
+  }, [userId, userName, fetchPreviousConversations]);
 
   // Change to a different conversation channel
   const handleConversationSelect = async (channelId) => {
@@ -891,6 +1025,7 @@ const ChatComponent = ({ userId, userName }) => {
         isOpen={showPreviousConversations}
         toggleOpen={() => setShowPreviousConversations(!showPreviousConversations)}
         onRefresh={fetchPreviousConversations}
+        onNewChat={handleNewChat}
         isLoading={loadingPreviousChats}
       />
       
