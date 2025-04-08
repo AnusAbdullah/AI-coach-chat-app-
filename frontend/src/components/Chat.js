@@ -244,6 +244,7 @@ const ChatComponent = ({ userId, userName }) => {
   }, [userId]);
 
   // Helper function to create new channel - with better error handling
+  // eslint-disable-next-line no-unused-vars
   const createNewChannelHelper = useCallback(async (client) => {
     if (!client) {
       console.error('Cannot create new channel: client is not initialized');
@@ -265,48 +266,75 @@ const ChatComponent = ({ userId, userName }) => {
         }
       }
       
-      // First simply try to create a new channel without backend registration
+      // First check if client is properly connected
+      if (!client.user || !client._isConnected) {
+        console.error('Stream client not properly connected:', 
+                      client.user ? 'Has user' : 'No user', 
+                      client._isConnected ? 'Connected' : 'Not connected');
+        throw new Error('Stream client not connected');
+      }
+      
+      // Generate a unique ID
+      const uniqueId = `${userId}-${Date.now()}`;
+      console.log('Creating direct Stream channel with ID:', uniqueId);
+      
+      // Force a connection status check
       try {
-        // Generate a unique ID
-        const uniqueId = `${userId}-${Date.now()}`;
-        console.log('Creating direct Stream channel with ID:', uniqueId);
-        
-        // Create the Stream Chat channel directly
-        const newChannel = client.channel('messaging', uniqueId, {
-          name: 'AI Coach Chat',
-          members: [userId, 'ai_coach_1'],
-        });
-        
-        // Watch the channel
+        await client.wsConnection.checkConnectionAndReconnect();
+      } catch (connErr) {
+        console.log('Connection check error (continuing):', connErr);
+      }
+      
+      // Create the Stream Chat channel directly with explicit options
+      const newChannel = client.channel('messaging', uniqueId, {
+        name: 'AI Coach Chat',
+        members: [userId, 'ai_coach_1'],
+        created_by_id: userId
+      });
+      
+      // First try to create channel
+      try {
+        await newChannel.create();
+        console.log('Stream channel created successfully');
+      } catch (createErr) {
+        console.error('Error creating channel, trying to watch instead:', createErr);
+      }
+      
+      // Then try to watch channel (even if create failed)
+      try {
         await newChannel.watch();
         console.log('Successfully watching Stream channel:', uniqueId);
-        
-        // Try to register with backend after successful Stream channel creation
-        try {
-          await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`, {
-            channel_id: uniqueId
-          });
-          console.log('Backend channel registration successful');
-        } catch (backendError) {
-          // Continue even if backend registration fails
-          console.warn('Backend channel registration failed, continuing with Stream channel:', backendError);
-        }
-        
-        // Send welcome message
+      } catch (watchErr) {
+        console.error('Error watching channel:', watchErr);
+        throw watchErr;
+      }
+      
+      // Register with backend only after successful Stream channel creation
+      try {
+        await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`, {
+          channel_id: uniqueId
+        });
+        console.log('Backend channel registration successful');
+      } catch (backendError) {
+        // Continue even if backend registration fails
+        console.warn('Backend channel registration failed, continuing with Stream channel:', backendError);
+      }
+      
+      // Send welcome message
+      try {
         await newChannel.sendMessage({
           text: "Hello! I'm your AI coach. How can I help you today?",
           user: { id: 'ai_coach_1', name: 'AI Coach' }
         });
-        
-        return newChannel;
-      } catch (streamError) {
-        console.error('Error creating Stream channel directly:', streamError);
-        throw streamError;
+      } catch (msgErr) {
+        console.warn('Failed to send welcome message:', msgErr);
+        // Continue anyway - not critical
       }
+      
+      return newChannel;
     } catch (error) {
       console.error('Error in createNewChannelHelper:', error);
-      setError(`Failed to create chat: ${error.message}`);
-      return null;
+      throw new Error(`Channel creation failed: ${error.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
       setConnectionStatus('');
@@ -412,30 +440,6 @@ const ChatComponent = ({ userId, userName }) => {
     }
   };
 
-  // Handle new chat creation
-  const handleNewChat = useCallback(async () => {
-    if (!isClientConnected) return;
-    try {
-      console.log('Creating new chat...');
-      setError(null);
-      setText('');
-      setShowQuickReplies(true);
-      
-      const newChannel = await createNewChannelHelper(chatClient);
-      if (newChannel) {
-        setChannel(newChannel);
-        console.log('New chat created with channel:', newChannel.id);
-        fetchPreviousConversations();
-        if (window.innerWidth < 768) setShowPreviousConversations(false);
-      } else {
-        setError('Failed to create a new chat.');
-      }
-    } catch (error) {
-      console.error('Error in handleNewChat:', error);
-      setError(`Failed to create a new chat: ${error.message || 'Unknown error'}`);
-    }
-  }, [chatClient, createNewChannelHelper, fetchPreviousConversations, isClientConnected]);
-
   // Quick reply handler
   const handleQuickReply = (quickReply) => {
     setText(quickReply);
@@ -459,82 +463,93 @@ const ChatComponent = ({ userId, userName }) => {
 
   // Main initialization and cleanup effect
   useEffect(() => {
-    let client = null;
-    let currentChannel = null;
+    console.log("Effect running with retryCount:", retryCount);
+    // Prevent any action if we're at max retries
+    if (retryCount >= maxRetries) {
+      console.log("Max retries reached, not initializing");
+      return;
+    }
+    
     let isMounted = true;
+    let localClient = null;
+    let localChannel = null;
+    let initInProgress = false;
 
     const cleanup = async () => {
       console.log("Running cleanup...");
-      setIsClientConnected(false);
-      if (isMounted) {
-        setChannel(null);
-        setChatClient(null);
-        setProcessingMessage(false);
-      }
-      if (currentChannel) {
-        console.log("Cleaning up channel...");
-        try {
-          currentChannel.off();
-          await currentChannel.stopWatching();
-        } catch (e) {
-          console.warn("Error stopping channel watch:", e);
+      try {
+        if (localChannel) {
+          console.log("Cleaning up channel...");
+          localChannel.off();
+          await localChannel.stopWatching();
+          localChannel = null;
         }
-        currentChannel = null;
-      }
-      if (client) {
-        console.log("Disconnecting client...");
-        try {
-          await client.disconnectUser();
-        } catch (e) {
-          console.log("Error disconnecting user:", e);
+        if (localClient) {
+          console.log("Disconnecting client...");
+          localClient.off(); // Remove all event listeners
+          await localClient.disconnectUser();
+          localClient = null;
         }
-        client = null;
+        if (isMounted) {
+          setChannel(null);
+          setChatClient(null);
+          setProcessingMessage(false);
+          setIsClientConnected(false);
+          setConnectionStatus('');
+          setLoadingPreviousChats(false);
+        }
+      } catch (e) {
+        console.warn("Error during cleanup:", e);
       }
     };
 
     const init = async () => {
+      if (!isMounted || initInProgress) return;
+      
+      initInProgress = true;
+      
       try {
-        if (!isMounted) return;
-        
         setLoading(true);
         setError(null);
         setConnectionStatus('Starting initialization...');
-
+        console.log("=== INITIALIZATION STARTED ===", {userId, userName, retryCount});
+        
+        // Ensure clean state before starting
+        await cleanup();
+        
         if (!userId || !userName) {
           throw new Error("User ID and name are required");
         }
 
-        // Always ensure we're starting fresh
-        await cleanup();
-        if (!isMounted) return;
-
+        // Create fresh client instance
         setConnectionStatus('Creating Stream Chat client...');
-        console.log("Creating Stream Chat client with API Key:", STREAM_API_KEY);
-        client = StreamChat.getInstance(STREAM_API_KEY);
-        console.log("Stream Chat client created");
-
-        setConnectionStatus('Requesting authentication token...');
-        console.log(`Requesting token for user: ${userId}`);
+        localClient = StreamChat.getInstance(STREAM_API_KEY);
+        console.log("Stream chat client created:", !!localClient);
         
-        let token;
+        // Get token with retry
+        setConnectionStatus('Requesting authentication token...');
+        let tokenResponse;
         try {
-          const tokenResponse = await axios.post(`${API_URL}/chat/token/?user_id=${userId}`);
-          console.log("Token API response received");
-          
-          if (!tokenResponse.data?.token) {
-            throw new Error("Empty token response from server");
-          }
-          token = tokenResponse.data.token;
-          console.log("Token retrieved successfully");
+          console.log("Requesting token for user:", userId);
+          tokenResponse = await axios.post(`${API_URL}/chat/token/?user_id=${userId}`);
+          console.log("Token response received:", !!tokenResponse.data);
         } catch (tokenError) {
-          console.error("Token retrieval error:", tokenError);
-          throw new Error(`Failed to get chat token: ${tokenError.message || 'Unknown error'}`);
+          console.error("Token request failed:", tokenError);
+          throw new Error("Failed to get authentication token");
         }
+        
+        if (!tokenResponse.data?.token) {
+          console.error("Empty token in response:", tokenResponse.data);
+          throw new Error("Empty token response from server");
+        }
+        const token = tokenResponse.data.token;
 
+        // Connect user with verification
         setConnectionStatus('Connecting to Stream Chat...');
+        console.log("Attempting to connect user:", userId);
+        
         try {
-          console.log(`Connecting user: ${userId} with token`);
-          await client.connectUser(
+          await localClient.connectUser(
             {
               id: userId,
               name: userName,
@@ -542,88 +557,193 @@ const ChatComponent = ({ userId, userName }) => {
             },
             token
           );
-          console.log("User connected successfully to Stream Chat");
-          setChatClient(client);
-          setIsClientConnected(true);
+          console.log("User connected successfully");
         } catch (connectError) {
-          console.error("Stream Chat connection error:", connectError);
-          setRetryCount(prev => prev + 1);
-          if (retryCount < maxRetries) {
-            console.log(`Retrying connection (${retryCount + 1}/${maxRetries})...`);
-            throw new Error(`Stream Chat connection failed: ${connectError.message}`);
-          } else {
-            throw new Error(`Failed to connect after ${maxRetries} attempts: ${connectError.message}`);
-          }
+          console.error("Failed to connect user:", connectError);
+          throw new Error(`Failed to connect user: ${connectError.message}`);
         }
-
-        if (!isMounted) {
-          await cleanup();
-          return;
-        }
-
-        // Now create a channel
-        setConnectionStatus('Creating chat channel...');
-        console.log("Creating initial channel...");
-        currentChannel = await createNewChannelHelper(client);
         
-        if (!currentChannel) {
-          throw new Error("Channel creation failed");
+        // Set client state immediately after connection
+        if (!isMounted) {
+          console.warn("Component unmounted during connection");
+          throw new Error('Component unmounted during initialization');
         }
-
-        console.log("Initial channel created:", currentChannel.id);
-        setChannel(currentChannel);
-
+        
+        console.log("Setting client to state early to prevent reloads...");
+        setChatClient(localClient);
+        setIsClientConnected(true);
+        
+        // Wait longer for connection to stabilize - with progress updates
+        console.log("Waiting for connection to stabilize...");
+        for (let i = 1; i <= 3; i++) {
+          if (!isMounted) break;
+          await new Promise(r => setTimeout(r, 500));
+          console.log(`Connection stabilization: ${i * 500}ms`);
+        }
+        
+        // Create channel immediately after connection
+        setConnectionStatus('Creating chat channel...');
+        console.log("Creating new channel...");
+        try {
+          // Use a local variable instead of accessing functions that depend on state
+          localChannel = await createNewChannelWithClient(localClient);
+          console.log("Channel created successfully:", localChannel?.id);
+          
+          if (isMounted) {
+            console.log("Setting channel to state...");
+            setChannel(localChannel);
+          }
+        } catch (channelError) {
+          console.error("Channel creation failed:", channelError);
+          throw channelError;
+        }
+        
         // Load previous conversations
         setConnectionStatus('Loading previous conversations...');
-        console.log("Loading previous conversations...");
         setLoadingPreviousChats(true);
+        console.log("Fetching previous conversations...");
         
         try {
           await fetchPreviousConversations();
-        } catch (convError) {
-          console.error("Error loading previous conversations:", convError);
-          // Continue anyway - not critical
+          console.log("Previous conversations loaded successfully");
+        } catch (fetchError) {
+          console.warn("Error fetching previous conversations:", fetchError);
+          // Not critical, continue anyway
         }
-
+        
+        // Complete initialization
         if (isMounted) {
+          console.log("=== INITIALIZATION COMPLETED SUCCESSFULLY ===");
+          setRetryCount(0); // Reset retry count on success
           setLoadingPreviousChats(false);
           setLoading(false);
           setConnectionStatus('');
-          setShowPreviousConversations(true);
-          console.log("Initialization completed successfully");
+        } else {
+          console.warn("Component unmounted during final steps");
         }
-
-        // Add these debug logs to verify:
-        console.log('Existing channels:', existingChannels.length);
-        existingChannels.forEach(ch => {
-          console.log('Channel:', ch.id, 'Created:', ch.data.created_at);
-        });
+        
+        initInProgress = false;
       } catch (error) {
+        console.error("=== INITIALIZATION FAILED ===");
         console.error("Chat initialization error:", error);
         
         if (isMounted) {
-          setError(`${error.message}. Please check your connection and try again.`);
+          const nextRetryCount = retryCount + 1;
+          
+          // Only retry if it's a connection-related error
+          const errorMsg = error.message || 'Unknown error';
+          const shouldRetry = errorMsg.includes('connection') || 
+                             errorMsg.includes('token') ||
+                             errorMsg.includes('WebSocket') ||
+                             errorMsg.includes('unmounted') ||
+                             errorMsg.includes('verify');
+          
+          console.log(`Retry decision: shouldRetry=${shouldRetry}, nextRetryCount=${nextRetryCount}, maxRetries=${maxRetries}`);
+          
+          if (shouldRetry && nextRetryCount < maxRetries) {
+            console.log(`Will retry initialization (attempt ${nextRetryCount})`);
+            setTimeout(() => {
+              if (isMounted) {
+                console.log("Scheduling retry...");
+                // Use a new action to be absolutely sure we don't loop
+                setRetryCount(nextRetryCount);
+                setError(`Connection failed (attempt ${nextRetryCount}/${maxRetries}): ${errorMsg}`);
+              }
+            }, 3000);
+          } else {
+            console.log("Not retrying - max retries reached or non-retryable error");
+            setError(`Failed to connect after ${maxRetries} attempts. Please try again later.`);
+            setRetryCount(maxRetries); // Ensure we don't retry anymore
+          }
+          
           setLoading(false);
           setLoadingPreviousChats(false);
           setConnectionStatus('');
-          // Don't trigger automatic reload, just clean up
-          await cleanup();
+        } else {
+          console.warn("Component unmounted during error handling");
         }
+        
+        initInProgress = false;
       }
     };
-
-    // Only initialize if we haven't seen an error yet
-    if (!error) {
+    
+    // Helper function to create channel without dependencies on state
+    const createNewChannelWithClient = async (client) => {
+      if (!client) {
+        console.error('Cannot create new channel: client is not initialized');
+        return null;
+      }
+      
+      try {
+        // Generate a unique ID
+        const uniqueId = `${userId}-${Date.now()}`;
+        console.log('Creating direct Stream channel with ID:', uniqueId);
+        
+        // Create the Stream Chat channel directly with explicit options
+        const newChannel = client.channel('messaging', uniqueId, {
+          name: 'AI Coach Chat',
+          members: [userId, 'ai_coach_1'],
+          created_by_id: userId
+        });
+        
+        // First try to create channel
+        try {
+          await newChannel.create();
+          console.log('Stream channel created successfully');
+        } catch (createErr) {
+          console.error('Error creating channel, trying to watch instead:', createErr);
+        }
+        
+        // Then try to watch channel (even if create failed)
+        try {
+          await newChannel.watch();
+          console.log('Successfully watching Stream channel:', uniqueId);
+        } catch (watchErr) {
+          console.error('Error watching channel:', watchErr);
+          throw watchErr;
+        }
+        
+        // Register with backend only after successful Stream channel creation
+        try {
+          await axios.post(`${API_URL}/chat/channel/?learner_id=${userId}&coach_id=ai_coach_1`, {
+            channel_id: uniqueId
+          });
+          console.log('Backend channel registration successful');
+        } catch (backendError) {
+          // Continue even if backend registration fails
+          console.warn('Backend channel registration failed, continuing with Stream channel:', backendError);
+        }
+        
+        // Send welcome message
+        try {
+          await newChannel.sendMessage({
+            text: "Hello! I'm your AI coach. How can I help you today?",
+            user: { id: 'ai_coach_1', name: 'AI Coach' }
+          });
+        } catch (msgErr) {
+          console.warn('Failed to send welcome message:', msgErr);
+          // Continue anyway - not critical
+        }
+        
+        return newChannel;
+      } catch (error) {
+        console.error('Error in createNewChannelWithClient:', error);
+        throw new Error(`Channel creation failed: ${error.message || 'Unknown error'}`);
+      }
+    };
+    
+    // Initialize only if we haven't started yet and we're below max retries
+    if (retryCount < maxRetries) {
+      console.log(`Starting initialization (retry ${retryCount}/${maxRetries})`);
       init();
     }
 
-    // Cleanup on unmount
     return () => {
       console.log("Component unmounting...");
       isMounted = false;
       cleanup();
     };
-  }, [userId, userName, createNewChannelHelper, fetchPreviousConversations, retryCount, maxRetries, error]);
+  }, [userId, userName, retryCount, maxRetries, fetchPreviousConversations]);
 
   // Focus textarea on mount
   useEffect(() => {
@@ -717,13 +837,13 @@ const ChatComponent = ({ userId, userName }) => {
             <li>Verify the backend server is running</li>
             <li>Try logging in again</li>
           </ul>
-        </div>
+      </div>
         
         <div style={{ display: 'flex', gap: '15px', justifyContent: 'center' }}>
           <button 
             onClick={() => {
-              // Just reload the page
-              window.location.reload();
+              setError(null);
+              setRetryCount(0); // Reset retry count to restart initialization
             }}
             style={{ 
               padding: '12px 24px', 
@@ -771,64 +891,63 @@ const ChatComponent = ({ userId, userName }) => {
         isOpen={showPreviousConversations}
         toggleOpen={() => setShowPreviousConversations(!showPreviousConversations)}
         onRefresh={fetchPreviousConversations}
-        onNewChat={handleNewChat}
         isLoading={loadingPreviousChats}
       />
       
-      <div className="chat-container">
+    <div className="chat-container">
         {chatClient && channel && isClientConnected ? (
-          <StreamChatComponent theme={customTheme} client={chatClient}>
-            <Channel channel={channel}>
-              <div className="str-chat__main">
-                <CustomChannelHeader />
-                <CustomMessageList />
-                <div className="message-input-container">
-                  {processingMessage && (
-                    <div className="typing-indicator">
-                      <div className="typing-indicator__dot"></div>
-                      <div className="typing-indicator__dot"></div>
-                      <div className="typing-indicator__dot"></div>
-                    </div>
-                  )}
-                  {showQuickReplies && (
-                    <div className="quick-reply-container">
-                      {quickReplies.map((reply, index) => (
-                        <button 
-                          key={index} 
-                          className="quick-reply-button" 
-                          onClick={() => handleQuickReply(reply)}
-                          disabled={processingMessage}
-                        >
-                          {reply}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <form onSubmit={handleSubmit} className="message-input-form">
-                    <textarea
-                      ref={textareaRef}
-                      className="message-input-textarea"
-                      value={text}
-                      onChange={(e) => setText(e.target.value)}
-                      onKeyPress={handleKeyPress}
-                      placeholder={processingMessage ? "AI coach is typing..." : "Type your message here..."}
-                      disabled={processingMessage}
-                      rows={1}
-                    />
-                    <button 
-                      className="message-input-button" 
-                      type="submit"
-                      disabled={processingMessage || !text.trim()}
-                    >
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="white"/>
-                      </svg>
-                    </button>
-                  </form>
+      <StreamChatComponent theme={customTheme} client={chatClient}>
+        <Channel channel={channel}>
+          <div className="str-chat__main">
+            <CustomChannelHeader />
+            <CustomMessageList />
+            <div className="message-input-container">
+              {processingMessage && (
+                <div className="typing-indicator">
+                  <div className="typing-indicator__dot"></div>
+                  <div className="typing-indicator__dot"></div>
+                  <div className="typing-indicator__dot"></div>
                 </div>
-              </div>
-            </Channel>
-          </StreamChatComponent>
+              )}
+              {showQuickReplies && (
+                <div className="quick-reply-container">
+                  {quickReplies.map((reply, index) => (
+                    <button 
+                      key={index} 
+                      className="quick-reply-button" 
+                      onClick={() => handleQuickReply(reply)}
+                      disabled={processingMessage}
+                    >
+                      {reply}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <form onSubmit={handleSubmit} className="message-input-form">
+                <textarea
+                  ref={textareaRef}
+                  className="message-input-textarea"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  placeholder={processingMessage ? "AI coach is typing..." : "Type your message here..."}
+                  disabled={processingMessage}
+                  rows={1}
+                />
+                <button 
+                  className="message-input-button" 
+                  type="submit"
+                  disabled={processingMessage || !text.trim()}
+                >
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="white"/>
+                  </svg>
+                </button>
+              </form>
+            </div>
+          </div>
+        </Channel>
+      </StreamChatComponent>
         ) : (
           <div className="loading-container">
             <LoadingIndicator size={40} />
